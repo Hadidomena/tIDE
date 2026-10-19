@@ -1,15 +1,15 @@
 <script lang="ts">
-	import { EditorState } from '@codemirror/state';
+	import { EditorState, Prec } from '@codemirror/state';
 	import { EditorView, keymap } from '@codemirror/view';
 	import { LanguageSupport } from '@codemirror/language';
+	import { acceptCompletion, autocompletion, completeAnyWord } from '@codemirror/autocomplete';
 	import { basicSetup } from 'codemirror';
 	import { untrack } from 'svelte';
+	import { tidalCompletion } from './vocabulary';
 	import { tidalLanguage } from './tidal-mode';
 
 	interface Props {
-		/** current buffer text, two-way (project open/save in step 5 uses this) */
 		content?: string;
-		/** called with the line or selection under the cursor on Mod-Enter (M1 step 3 wires the session) */
 		onEval?: (code: string) => void;
 	}
 
@@ -18,18 +18,17 @@
 	let host: HTMLDivElement | undefined = $state();
 	let view: EditorView | undefined;
 
-	const tidalSupport = new LanguageSupport(tidalLanguage);
+	const tidalSupport = new LanguageSupport(tidalLanguage, [
+		autocompletion({ override: [tidalCompletion, completeAnyWord] }),
+		Prec.high(keymap.of([{ key: 'Tab', run: acceptCompletion }]))
+	]);
 
-	/** eval semantics per plan-v2 §4.1: selection if any, else the whole current line */
 	function lineOrSelection(v: EditorView): string {
 		const { from, to } = v.state.selection.main;
 		if (from !== to) return v.state.sliceDoc(from, to);
 		return v.state.doc.lineAt(from).text;
 	}
 
-	// mount once the host element exists.
-	// IMPORTANT: only `host` may be tracked here — reading `content` reactively would make
-	// every keystroke re-run this effect, destroying + recreating the view (focus/cursor loss).
 	$effect(() => {
 		if (!host) return;
 		view = new EditorView({
@@ -50,7 +49,6 @@
 							}
 						}
 					]),
-					// typing -> prop (keeps parent's bind:content in sync)
 					EditorView.updateListener.of((u) => {
 						if (u.docChanged) content = u.state.doc.toString();
 					})
@@ -63,7 +61,6 @@
 		};
 	});
 
-	// external prop change (project open in step 5) -> editor; guarded against echo loops
 	$effect(() => {
 		if (!view) return;
 		const current = view.state.doc.toString();
