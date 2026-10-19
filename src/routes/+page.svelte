@@ -1,179 +1,101 @@
 <script lang="ts">
-	import { invoke } from '@tauri-apps/api/core';
-	import Database from '@tauri-apps/plugin-sql';
+	import Editor from '$lib/editor/Editor.svelte';
 
-	let name = $state('');
-	let greetMsg = $state('');
-	let dbStatus = $state('connecting…');
+	let buffer = $state(`-- tIDE (M1 step 1) — editor shell with Tidal highlighting
+-- Cmd/Ctrl+Enter requests eval of the current line/selection;
+-- the live GHCi session replaces the echo console in step 3.
 
-	async function greet(event: Event) {
-		event.preventDefault();
-		// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-		greetMsg = await invoke('greet', { name });
+let beats = [1, 2, 3, 4]
+
+d1 $ s "bd:1 sn*2 hh"
+   # n (slow 2 $ segment 4 $ rand)
+`);
+
+	let evalEcho = $state('');
+
+	// placeholder sink until session_eval lands (step 3)
+	function handleEval(code: string) {
+		evalEcho = `eval requested (no session yet):\n\n${code}`;
 	}
-
-	// M0 step 3e: DB smoke test — Database.load() runs the registered migrations (plan-v2 §8).
-	async function checkDb() {
-		// Tauri IPC only exists inside the app window — plain-browser tabs on :1420 can't invoke.
-		if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
-			dbStatus =
-				'not a Tauri window — use the app window from `npm run tauri dev`, not a browser tab';
-			return;
-		}
-		try {
-			const db = await Database.load('sqlite:tide.db');
-			const rows = await db.select<{ n: number }[]>('SELECT COUNT(*) AS n FROM settings');
-			dbStatus = `DB ready: ${rows[0]?.n ?? 0} settings`;
-		} catch (err) {
-			dbStatus = `DB error: ${err}`;
-		}
-	}
-
-	$effect(() => {
-		void checkDb();
-	});
 </script>
 
-<main class="container">
-	<h1>Welcome to Tauri + Svelte</h1>
+<header>
+	<h1>tIDE</h1>
+	<span class="chip">session: idle — live in M1 step 3</span>
+</header>
 
-	<div class="row">
-		<a href="https://vite.dev" target="_blank">
-			<img src="/vite.svg" class="logo vite" alt="Vite Logo" />
-		</a>
-		<a href="https://tauri.app" target="_blank">
-			<img src="/tauri.svg" class="logo tauri" alt="Tauri Logo" />
-		</a>
-		<a href="https://svelte.dev" target="_blank">
-			<img src="/svelte.svg" class="logo svelte-kit" alt="SvelteKit Logo" />
-		</a>
-	</div>
-	<p>Click on the Tauri, Vite, and SvelteKit logos to learn more.</p>
-
-	<form class="row" onsubmit={greet}>
-		<input id="greet-input" placeholder="Enter a name..." bind:value={name} />
-		<button type="submit">Greet</button>
-	</form>
-	<p>{greetMsg}</p>
-	<p>{dbStatus}</p>
+<main>
+	<section class="editor-pane" aria-label="code editor">
+		<Editor bind:content={buffer} onEval={handleEval} />
+	</section>
+	<section class="console-pane" aria-label="console">
+		{#if evalEcho}
+			<pre>{evalEcho}</pre>
+		{:else}
+			<p class="hint">console pane — the live GHCi stream lands with the session (step 3)</p>
+		{/if}
+	</section>
 </main>
 
 <style>
-	.logo.vite:hover {
-		filter: drop-shadow(0 0 2em #747bff);
-	}
-
-	.logo.svelte-kit:hover {
-		filter: drop-shadow(0 0 2em #ff3e00);
-	}
-
-	:root {
-		font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-		font-size: 16px;
-		line-height: 24px;
-		font-weight: 400;
-
-		color: #0f0f0f;
-		background-color: #f6f6f6;
-
-		font-synthesis: none;
-		text-rendering: optimizeLegibility;
-		-webkit-font-smoothing: antialiased;
-		-moz-osx-font-smoothing: grayscale;
-		-webkit-text-size-adjust: 100%;
-	}
-
-	.container {
+	:global(body) {
 		margin: 0;
-		padding-top: 10vh;
+		font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
+	}
+
+	header {
 		display: flex;
-		flex-direction: column;
-		justify-content: center;
-		text-align: center;
-	}
-
-	.logo {
-		height: 6em;
-		padding: 1.5em;
-		will-change: filter;
-		transition: 0.75s;
-	}
-
-	.logo.tauri:hover {
-		filter: drop-shadow(0 0 2em #24c8db);
-	}
-
-	.row {
-		display: flex;
-		justify-content: center;
-	}
-
-	a {
-		font-weight: 500;
-		color: #646cff;
-		text-decoration: inherit;
-	}
-
-	a:hover {
-		color: #535bf2;
+		align-items: center;
+		gap: 1rem;
+		padding: 0.45rem 1rem;
+		border-bottom: 1px solid color-mix(in srgb, currentColor 20%, transparent);
 	}
 
 	h1 {
-		text-align: center;
+		font-size: 1.05rem;
+		margin: 0;
 	}
 
-	input,
-	button {
-		border-radius: 8px;
-		border: 1px solid transparent;
-		padding: 0.6em 1.2em;
-		font-size: 1em;
-		font-weight: 500;
-		font-family: inherit;
-		color: #0f0f0f;
-		background-color: #ffffff;
-		transition: border-color 0.25s;
-		box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
+	.chip {
+		font-size: 0.72rem;
+		padding: 0.18rem 0.6rem;
+		border-radius: 999px;
+		background: color-mix(in srgb, currentColor 10%, transparent);
 	}
 
-	button {
-		cursor: pointer;
+	main {
+		display: grid;
+		grid-template-columns: 3fr 2fr;
+		height: calc(100vh - 2.7rem);
 	}
 
-	button:hover {
-		border-color: #396cd8;
-	}
-	button:active {
-		border-color: #396cd8;
-		background-color: #e8e8e8;
+	.editor-pane,
+	.console-pane {
+		min-width: 0;
+		overflow: hidden;
 	}
 
-	input,
-	button {
-		outline: none;
+	.console-pane {
+		border-left: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+		padding: 0.5rem 0.75rem;
+		overflow-y: auto;
 	}
 
-	#greet-input {
-		margin-right: 5px;
+	.console-pane pre,
+	.hint {
+		font-family: Menlo, Monaco, Consolas, monospace;
+		font-size: 0.78rem;
+		white-space: pre-wrap;
+	}
+
+	.hint {
+		color: color-mix(in srgb, currentColor 55%, transparent);
 	}
 
 	@media (prefers-color-scheme: dark) {
-		:root {
-			color: #f6f6f6;
-			background-color: #2f2f2f;
-		}
-
-		a:hover {
-			color: #24c8db;
-		}
-
-		input,
-		button {
-			color: #ffffff;
-			background-color: #0f0f0f98;
-		}
-		button:active {
-			background-color: #0f0f0f69;
+		:global(body) {
+			background-color: #1e1e24;
+			color: #eaeaea;
 		}
 	}
 </style>
