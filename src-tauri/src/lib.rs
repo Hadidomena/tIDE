@@ -6,6 +6,8 @@ pub mod toolchain;
 
 use tauri_plugin_sql::{Migration, MigrationKind};
 
+use session::{Session, session_eval, session_restart, session_start};
+
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -28,7 +30,19 @@ pub fn run() {
                 .add_migrations("sqlite:tide.db", migrations)
                 .build(),
         )
-        .invoke_handler(tauri::generate_handler![greet])
-        .run(tauri::generate_context!())
-        .expect("error while running tIDE");
+        .manage(Session::new())
+        .invoke_handler(tauri::generate_handler![
+            greet,
+            session_start,
+            session_eval,
+            session_restart
+        ])
+        .build(tauri::generate_context!())
+        .expect("error while building tIDE")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                use tauri::Manager;
+                app_handle.state::<Session>().stop();
+            }
+        });
 }
