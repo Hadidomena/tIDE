@@ -1,7 +1,7 @@
 name: build
 on:
   push:
-    tags: ["v*"]
+    tags: ['v*']
   workflow_dispatch: {}
 
 permissions:
@@ -14,11 +14,11 @@ jobs:
       matrix:
         include:
           - os: ubuntu-22.04
-            args: ""
+            args: ''
           - os: windows-latest
-            args: ""
+            args: ''
           - os: macos-latest
-            args: "--target universal-apple-darwin"
+            args: '--target universal-apple-darwin'
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -26,7 +26,7 @@ jobs:
         with: { node-version: 22, cache: npm }
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-        with: { workspaces: "src-tauri" }
+        with: { workspaces: 'src-tauri' }
       - name: mac universal targets
         if: matrix.os == 'macos-latest'
         run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
