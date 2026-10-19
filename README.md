@@ -16,7 +16,7 @@ The editor/REPL engine, sample library, transforms and pattern analyzer land in 
 ## Quickstart (development)
 
 ```sh
-git clone git@github.com:Hadidomena/tIDE.git
+git clone https://github.com/Hadidomena/tIDE.git
 cd tIDE
 lefthook install          # one-time; installs pre-commit / commit-msg / pre-push hooks
 npm install
