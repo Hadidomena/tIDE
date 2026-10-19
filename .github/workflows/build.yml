@@ -41,6 +41,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          tagName: ${{ github.event_name != 'workflow_dispatch' && github.ref_name || '' }}
+          releaseName: 'tIDE __VERSION__'
+          releaseBody: 'Hello-world scaffold (M0). Installers are unsigned — see notes/plan-v2.md §9/§12.'
           releaseDraft: true
           prerelease: true
           args: ${{ matrix.args }}
