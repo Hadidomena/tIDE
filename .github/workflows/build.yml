@@ -23,7 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: npm }
+        with: { node-version: 'lts/*', cache: npm }
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: 'src-tauri' }
@@ -43,7 +43,7 @@ jobs:
         with:
           tagName: ${{ github.event_name != 'workflow_dispatch' && github.ref_name || '' }}
           releaseName: 'tIDE __VERSION__'
-          releaseBody: 'Hello-world scaffold (M0). Installers are unsigned — see notes/plan-v2.md §9/§12.'
+          releaseBody: 'Scaffold — unsigned installers. See README.md for status, setup and roadmap.'
           releaseDraft: true
           prerelease: true
           args: ${{ matrix.args }}
