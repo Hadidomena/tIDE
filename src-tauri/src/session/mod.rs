@@ -63,6 +63,12 @@ struct Active {
     id: u32,
 }
 
+impl Drop for Active {
+    fn drop(&mut self) {
+        let _ = self.child.lock().unwrap().kill();
+    }
+}
+
 pub struct Session {
     cmd_tx: Sender<Cmd>,
     evt_rx: Mutex<Option<Receiver<SessionEvent>>>,
@@ -134,6 +140,10 @@ impl Session {
 
     pub fn stop(&self) {
         let _ = self.cmd_tx.send(Cmd::Stop);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while self.state() != SessionState::Stopped && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
     }
 
     fn attach_forwarder(&self, app: &AppHandle) {

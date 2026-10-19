@@ -3,6 +3,7 @@
 	import { EditorView, keymap } from '@codemirror/view';
 	import { LanguageSupport } from '@codemirror/language';
 	import { acceptCompletion, autocompletion, completeAnyWord } from '@codemirror/autocomplete';
+	import { indentLess, indentMore } from '@codemirror/commands';
 	import { basicSetup } from 'codemirror';
 	import { untrack } from 'svelte';
 	import { tidalCompletion } from './vocabulary';
@@ -20,7 +21,12 @@
 
 	const tidalSupport = new LanguageSupport(tidalLanguage, [
 		autocompletion({ override: [tidalCompletion, completeAnyWord] }),
-		Prec.high(keymap.of([{ key: 'Tab', run: acceptCompletion }]))
+		Prec.high(
+			keymap.of([
+				{ key: 'Tab', run: (v) => acceptCompletion(v) || indentMore(v) },
+				{ key: 'Shift-Tab', run: indentLess }
+			])
+		)
 	]);
 
 	function lineOrSelection(v: EditorView): string {
