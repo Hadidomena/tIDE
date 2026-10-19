@@ -3,6 +3,7 @@
 	import { EditorView, keymap } from '@codemirror/view';
 	import { LanguageSupport } from '@codemirror/language';
 	import { basicSetup } from 'codemirror';
+	import { untrack } from 'svelte';
 	import { tidalLanguage } from './tidal-mode';
 
 	interface Props {
@@ -26,13 +27,15 @@
 		return v.state.doc.lineAt(from).text;
 	}
 
-	// mount once the host element exists
+	// mount once the host element exists.
+	// IMPORTANT: only `host` may be tracked here — reading `content` reactively would make
+	// every keystroke re-run this effect, destroying + recreating the view (focus/cursor loss).
 	$effect(() => {
 		if (!host) return;
 		view = new EditorView({
 			parent: host,
 			state: EditorState.create({
-				doc: content,
+				doc: untrack(() => content),
 				extensions: [
 					basicSetup,
 					tidalSupport,

@@ -12,6 +12,7 @@ slow 2 $ sound "bd sn:1 ~ hh"
 
 	let consoleEl: HTMLPreElement | undefined = $state();
 	let stickToBottom = true;
+	let lineIn = $state('');
 
 	$effect(() => {
 		void session.connect();
@@ -26,6 +27,15 @@ slow 2 $ sound "bd sn:1 ~ hh"
 
 	function handleEval(code: string) {
 		void session.eval(code);
+	}
+
+	function onConsoleKey(e: KeyboardEvent) {
+		if (e.key !== 'Enter') return;
+		const code = lineIn.trim();
+		if (!code) return;
+		session.echo(code);
+		void session.eval(code);
+		lineIn = '';
 	}
 
 	function onScroll() {
@@ -49,10 +59,21 @@ slow 2 $ sound "bd sn:1 ~ hh"
 	<section class="editor-pane" aria-label="code editor">
 		<Editor bind:content={buffer} onEval={handleEval} />
 	</section>
-	<section class="console-pane" aria-label="console" role="log">
-		<pre bind:this={consoleEl} onscroll={onScroll}>{#each session.chunks as c (c.id)}<span
-					class={c.stream}>{c.text}</span
+	<section class="console-pane" aria-label="console">
+		<pre
+			bind:this={consoleEl}
+			onscroll={onScroll}
+			role="log">{#each session.chunks as c (c.id)}<span class={c.stream}>{c.text}</span
 				>{/each}</pre>
+		<div class="console-row">
+			<span class="prompt">›</span>
+			<input
+				bind:value={lineIn}
+				onkeydown={onConsoleKey}
+				placeholder="type Haskell or :commands, Enter evaluates"
+				aria-label="console input"
+			/>
+		</div>
 	</section>
 </main>
 
@@ -133,6 +154,9 @@ slow 2 $ sound "bd sn:1 ~ hh"
 	}
 
 	.console-pane {
+		display: flex;
+		flex-direction: column;
+		gap: 0.4rem;
 		border-left: 1px solid color-mix(in srgb, currentColor 20%, transparent);
 		padding: 0.5rem 0.75rem;
 		overflow: hidden;
@@ -140,12 +164,37 @@ slow 2 $ sound "bd sn:1 ~ hh"
 
 	.console-pane pre {
 		margin: 0;
+		flex: 1;
+		min-height: 0;
 		font-family: Menlo, Monaco, Consolas, monospace;
 		font-size: 0.78rem;
 		line-height: 1.45;
 		white-space: pre-wrap;
-		height: 100%;
 		overflow-y: auto;
+	}
+
+	.console-row {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		padding-top: 0.3rem;
+		border-top: 1px solid color-mix(in srgb, currentColor 15%, transparent);
+	}
+
+	.console-row .prompt {
+		font-family: Menlo, monospace;
+		color: #2ecc71;
+	}
+
+	.console-row input {
+		flex: 1;
+		min-width: 0;
+		background: transparent;
+		border: none;
+		outline: none;
+		color: inherit;
+		font-family: Menlo, Monaco, Consolas, monospace;
+		font-size: 0.78rem;
 	}
 
 	.stderr {
