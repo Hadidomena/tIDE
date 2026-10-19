@@ -13,7 +13,6 @@ export default tseslint.config(
 		}
 	},
 	{
-		// parse <script lang="ts"> inside .svelte files with the TS parser
 		files: ['**/*.svelte'],
 		languageOptions: {
 			parserOptions: {
@@ -22,6 +21,6 @@ export default tseslint.config(
 		}
 	},
 	{
-		ignores: ['dist/', 'src-tauri/target/', '.svelte-kit/']
+		ignores: ['build/', 'dist/', 'src-tauri/target/', '.svelte-kit/']
 	}
 );
