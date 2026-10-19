@@ -9,32 +9,32 @@ pre-commit:
   jobs:
     - name: whitespace
       run: git diff --check --cached
-      fail_text: "Trailing whitespace or conflict markers in staged changes"
+      fail_text: 'Trailing whitespace or conflict markers in staged changes'
 
     - name: rust-fmt
       root: src-tauri/
-      glob: "*.rs"
+      glob: '*.rs'
       run: cargo fmt -- {staged_files}
       stage_fixed: true
-      fail_text: "rustfmt failed on staged Rust files"
+      fail_text: 'rustfmt failed on staged Rust files'
 
     - name: rust-clippy
       root: src-tauri/
-      glob: "*.rs"
+      glob: '*.rs'
       run: cargo clippy --all-targets -- -D warnings
-      fail_text: "cargo clippy reported warnings (treated as errors)"
+      fail_text: 'cargo clippy reported warnings (treated as errors)'
 
     - name: eslint
-      glob: "src/**/*.{ts,js,svelte}"
+      glob: 'src/**/*.{ts,js,svelte}'
       run: npx --no-install eslint --fix {staged_files}
       stage_fixed: true
-      fail_text: "eslint failed on staged frontend files"
+      fail_text: 'eslint failed on staged frontend files'
 
     - name: prettier
-      glob: "src/**/*.{ts,js,svelte,json,css}"
+      glob: 'src/**/*.{ts,js,svelte,json,css}'
       run: npx --no-install prettier --write {staged_files}
       stage_fixed: true
-      fail_text: "prettier could not format staged frontend files"
+      fail_text: 'prettier could not format staged frontend files'
 
 commit-msg:
   skip:
@@ -51,14 +51,14 @@ pre-push:
   jobs:
     - name: cargo-test
       root: src-tauri/
-      glob: "*.rs"
+      glob: '*.rs'
       run: cargo test
-      fail_text: "cargo test failed — fix before pushing"
+      fail_text: 'cargo test failed — fix before pushing'
 
     - name: svelte-check
-      glob: "src/**/*.{ts,js,svelte}"
+      glob: 'src/**/*.{ts,js,svelte}'
       run: npm run check --if-present
-      fail_text: "svelte-check failed — fix before pushing"
+      fail_text: 'svelte-check failed — fix before pushing'
 
 post-merge:
   jobs:
