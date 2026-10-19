@@ -1,14 +1,37 @@
 <script lang="ts">
 	import { invoke } from '@tauri-apps/api/core';
+	import Database from '@tauri-apps/plugin-sql';
 
 	let name = $state('');
 	let greetMsg = $state('');
+	let dbStatus = $state('connecting…');
 
 	async function greet(event: Event) {
 		event.preventDefault();
 		// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 		greetMsg = await invoke('greet', { name });
 	}
+
+	// M0 step 3e: DB smoke test — Database.load() runs the registered migrations (plan-v2 §8).
+	async function checkDb() {
+		// Tauri IPC only exists inside the app window — plain-browser tabs on :1420 can't invoke.
+		if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
+			dbStatus =
+				'not a Tauri window — use the app window from `npm run tauri dev`, not a browser tab';
+			return;
+		}
+		try {
+			const db = await Database.load('sqlite:tide.db');
+			const rows = await db.select<{ n: number }[]>('SELECT COUNT(*) AS n FROM settings');
+			dbStatus = `DB ready: ${rows[0]?.n ?? 0} settings`;
+		} catch (err) {
+			dbStatus = `DB error: ${err}`;
+		}
+	}
+
+	$effect(() => {
+		void checkDb();
+	});
 </script>
 
 <main class="container">
@@ -32,6 +55,7 @@
 		<button type="submit">Greet</button>
 	</form>
 	<p>{greetMsg}</p>
+	<p>{dbStatus}</p>
 </main>
 
 <style>
