@@ -66,7 +66,8 @@ jobs:
           path: |
             ~/.cabal
             ~/.ghc
-          key: cabal-ghc-9.10.3-tidal-v1
+            /usr/local/.ghcup
+          key: ghcup-ghc-9.10.3-tidal-v2
       - name: install ghcup + ghc 9.10.3 + cabal
         run: |
           # GitHub's ubuntu runner image exports GHCUP_INSTALL_BASE_PREFIX=/usr/local
