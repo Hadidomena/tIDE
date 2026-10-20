@@ -1,5 +1,12 @@
 <script lang="ts">
 	import Editor from '$lib/editor/Editor.svelte';
+	import {
+		checkLastProject,
+		openLastProject,
+		openProject,
+		project,
+		saveProject
+	} from '$lib/project.svelte';
 	import { session } from '$lib/session.svelte';
 
 	let buffer = $state(`-- tIDE — live GHCi session (M1 step 3)
@@ -13,10 +20,66 @@ slow 2 $ sound "bd sn:1 ~ hh"
 	let consoleEl: HTMLPreElement | undefined = $state();
 	let stickToBottom = true;
 	let lineIn = $state('');
+	let lastSaved = $state('');
+	const dirty = $derived(buffer !== lastSaved);
 
 	$effect(() => {
 		void session.connect();
 	});
+
+	$effect(() => {
+		void checkLastProject();
+	});
+
+	$effect(() => {
+		const onKey = (e: KeyboardEvent) => {
+			if (!(e.metaKey || e.ctrlKey)) return;
+			const k = e.key.toLowerCase();
+			if (k === 's') {
+				e.preventDefault();
+				void doSave(e.shiftKey);
+			} else if (k === 'o') {
+				e.preventDefault();
+				void doOpen();
+			}
+		};
+		window.addEventListener('keydown', onKey);
+		return () => window.removeEventListener('keydown', onKey);
+	});
+
+	async function doOpen() {
+		try {
+			const f = await openProject();
+			if (f) {
+				buffer = f.content;
+				lastSaved = f.content;
+				session.notify(`opened ${f.path}`);
+			}
+		} catch (e) {
+			session.notify(`open failed: ${String(e)}`);
+		}
+	}
+
+	async function doOpenLast() {
+		const f = await openLastProject();
+		if (f) {
+			buffer = f.content;
+			lastSaved = f.content;
+			session.notify(`reopened ${f.path}`);
+		}
+	}
+
+	async function doSave(saveAs = false) {
+		try {
+			const p = await saveProject(buffer, saveAs);
+			if (p) {
+				lastSaved = buffer;
+				session.notify(`saved ${p}`);
+			}
+		} catch (e) {
+			session.notify(`save failed: ${String(e)}`);
+		}
+	}
 
 	$effect(() => {
 		const last = session.chunks.at(-1);
@@ -46,6 +109,16 @@ slow 2 $ sound "bd sn:1 ~ hh"
 
 <header>
 	<h1>tIDE</h1>
+	<span class="file" title={project.path || undefined}>
+		{project.title}{#if dirty}<span class="star">*</span>{/if}
+	</span>
+	<div class="tools">
+		<button class="tbtn" type="button" onclick={doOpen}>open</button>
+		<button class="tbtn" type="button" onclick={() => void doSave(false)}>save</button>
+		{#if project.hasLast}
+			<button class="tbtn" type="button" onclick={doOpenLast}>last</button>
+		{/if}
+	</div>
 	<span class="chip {session.state}">
 		<span class="dot"></span>
 		session: {session.state}
@@ -131,7 +204,8 @@ slow 2 $ sound "bd sn:1 ~ hh"
 		}
 	}
 
-	.restart {
+	.restart,
+	.tbtn {
 		font-size: 0.72rem;
 		padding: 0.15rem 0.7rem;
 		border-radius: 6px;
@@ -139,6 +213,24 @@ slow 2 $ sound "bd sn:1 ~ hh"
 		background: transparent;
 		color: inherit;
 		cursor: pointer;
+	}
+
+	.tools {
+		display: inline-flex;
+		gap: 0.35rem;
+	}
+
+	.file {
+		font-size: 0.78rem;
+		opacity: 0.85;
+		max-width: 22rem;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.star {
+		font-weight: 700;
 	}
 
 	main {

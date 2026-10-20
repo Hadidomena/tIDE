@@ -73,9 +73,11 @@ class SessionModel {
 		}
 	}
 
-	/** visible echo for console-typed input (ghci on pipes does not echo stdin itself) */
 	echo(code: string) {
 		this.push('system', `> ${code}\n`);
+	}
+	notify(text: string) {
+		this.push('system', text.endsWith('\n') ? text : `${text}\n`);
 	}
 
 	async restart() {
