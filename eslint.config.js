@@ -22,5 +22,9 @@ export default tseslint.config(
 	},
 	{
 		ignores: ['build/', 'dist/', 'src-tauri/target/', '.svelte-kit/']
+	},
+	{
+		files: ['**/*.svelte.js', '**/*.svelte.ts'],
+		languageOptions: { parser: tseslint.parser }
 	}
 );

@@ -1,10 +1,14 @@
 pub mod analyzer;
 pub mod engine;
 pub mod library;
+pub mod project;
 pub mod session;
 pub mod toolchain;
 
 use tauri_plugin_sql::{Migration, MigrationKind};
+
+use project::{project_open, project_save};
+use session::{Session, session_eval, session_restart, session_start};
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
@@ -23,12 +27,27 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_sql::Builder::default()
                 .add_migrations("sqlite:tide.db", migrations)
                 .build(),
         )
-        .invoke_handler(tauri::generate_handler![greet])
-        .run(tauri::generate_context!())
-        .expect("error while running tIDE");
+        .manage(Session::new())
+        .invoke_handler(tauri::generate_handler![
+            greet,
+            session_start,
+            session_eval,
+            session_restart,
+            project_open,
+            project_save
+        ])
+        .build(tauri::generate_context!())
+        .expect("error while building tIDE")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                use tauri::Manager;
+                app_handle.state::<Session>().stop();
+            }
+        });
 }

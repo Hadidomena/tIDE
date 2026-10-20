@@ -1,179 +1,310 @@
 <script lang="ts">
-	import { invoke } from '@tauri-apps/api/core';
-	import Database from '@tauri-apps/plugin-sql';
+	import Editor from '$lib/editor/Editor.svelte';
+	import {
+		checkLastProject,
+		openLastProject,
+		openProject,
+		project,
+		saveProject
+	} from '$lib/project.svelte';
+	import { session } from '$lib/session.svelte';
 
-	let name = $state('');
-	let greetMsg = $state('');
-	let dbStatus = $state('connecting…');
+	let buffer = $state(`-- tIDE — live GHCi session (M1 step 3)
+-- Cmd/Ctrl+Enter evaluates the current line or selection.
+-- Try it: 1+1 · then let zz = 5*5 · then zz + 1  (stateful!)
 
-	async function greet(event: Event) {
-		event.preventDefault();
-		// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-		greetMsg = await invoke('greet', { name });
+slow 2 $ sound "bd sn:1 ~ hh"
+-- the d1/slow eval prints "not in scope" until M2 boots a synth context
+`);
+
+	let consoleEl: HTMLPreElement | undefined = $state();
+	let stickToBottom = true;
+	let lineIn = $state('');
+	let lastSaved = $state('');
+	const dirty = $derived(buffer !== lastSaved);
+
+	$effect(() => {
+		void session.connect();
+	});
+
+	$effect(() => {
+		void checkLastProject();
+	});
+
+	$effect(() => {
+		const onKey = (e: KeyboardEvent) => {
+			if (!(e.metaKey || e.ctrlKey)) return;
+			const k = e.key.toLowerCase();
+			if (k === 's') {
+				e.preventDefault();
+				void doSave(e.shiftKey);
+			} else if (k === 'o') {
+				e.preventDefault();
+				void doOpen();
+			}
+		};
+		window.addEventListener('keydown', onKey);
+		return () => window.removeEventListener('keydown', onKey);
+	});
+
+	async function doOpen() {
+		try {
+			const f = await openProject();
+			if (f) {
+				buffer = f.content;
+				lastSaved = f.content;
+				session.notify(`opened ${f.path}`);
+			}
+		} catch (e) {
+			session.notify(`open failed: ${String(e)}`);
+		}
 	}
 
-	// M0 step 3e: DB smoke test — Database.load() runs the registered migrations (plan-v2 §8).
-	async function checkDb() {
-		// Tauri IPC only exists inside the app window — plain-browser tabs on :1420 can't invoke.
-		if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
-			dbStatus =
-				'not a Tauri window — use the app window from `npm run tauri dev`, not a browser tab';
-			return;
+	async function doOpenLast() {
+		const f = await openLastProject();
+		if (f) {
+			buffer = f.content;
+			lastSaved = f.content;
+			session.notify(`reopened ${f.path}`);
 		}
+	}
+
+	async function doSave(saveAs = false) {
 		try {
-			const db = await Database.load('sqlite:tide.db');
-			const rows = await db.select<{ n: number }[]>('SELECT COUNT(*) AS n FROM settings');
-			dbStatus = `DB ready: ${rows[0]?.n ?? 0} settings`;
-		} catch (err) {
-			dbStatus = `DB error: ${err}`;
+			const p = await saveProject(buffer, saveAs);
+			if (p) {
+				lastSaved = buffer;
+				session.notify(`saved ${p}`);
+			}
+		} catch (e) {
+			session.notify(`save failed: ${String(e)}`);
 		}
 	}
 
 	$effect(() => {
-		void checkDb();
+		const last = session.chunks.at(-1);
+		if (last && consoleEl && stickToBottom) {
+			consoleEl.scrollTop = consoleEl.scrollHeight;
+		}
 	});
+
+	function handleEval(code: string) {
+		void session.eval(code);
+	}
+
+	function onConsoleKey(e: KeyboardEvent) {
+		if (e.key !== 'Enter') return;
+		const code = lineIn.trim();
+		if (!code) return;
+		session.echo(code);
+		void session.eval(code);
+		lineIn = '';
+	}
+
+	function onScroll() {
+		if (!consoleEl) return;
+		stickToBottom = consoleEl.scrollHeight - consoleEl.scrollTop - consoleEl.clientHeight < 24;
+	}
 </script>
 
-<main class="container">
-	<h1>Welcome to Tauri + Svelte</h1>
-
-	<div class="row">
-		<a href="https://vite.dev" target="_blank">
-			<img src="/vite.svg" class="logo vite" alt="Vite Logo" />
-		</a>
-		<a href="https://tauri.app" target="_blank">
-			<img src="/tauri.svg" class="logo tauri" alt="Tauri Logo" />
-		</a>
-		<a href="https://svelte.dev" target="_blank">
-			<img src="/svelte.svg" class="logo svelte-kit" alt="SvelteKit Logo" />
-		</a>
+<header>
+	<h1>tIDE</h1>
+	<span class="file" title={project.path || undefined}>
+		{project.title}{#if dirty}<span class="star">*</span>{/if}
+	</span>
+	<div class="tools">
+		<button class="tbtn" type="button" onclick={doOpen}>open</button>
+		<button class="tbtn" type="button" onclick={() => void doSave(false)}>save</button>
+		{#if project.hasLast}
+			<button class="tbtn" type="button" onclick={doOpenLast}>last</button>
+		{/if}
 	</div>
-	<p>Click on the Tauri, Vite, and SvelteKit logos to learn more.</p>
+	<span class="chip {session.state}">
+		<span class="dot"></span>
+		session: {session.state}
+	</span>
+	{#if session.state === 'failed' || session.state === 'stopped'}
+		<button class="restart" type="button" onclick={() => void session.restart()}>restart</button>
+	{/if}
+</header>
 
-	<form class="row" onsubmit={greet}>
-		<input id="greet-input" placeholder="Enter a name..." bind:value={name} />
-		<button type="submit">Greet</button>
-	</form>
-	<p>{greetMsg}</p>
-	<p>{dbStatus}</p>
+<main>
+	<section class="editor-pane" aria-label="code editor">
+		<Editor bind:content={buffer} onEval={handleEval} />
+	</section>
+	<section class="console-pane" aria-label="console">
+		<pre
+			bind:this={consoleEl}
+			onscroll={onScroll}
+			role="log">{#each session.chunks as c (c.id)}<span class={c.stream}>{c.text}</span
+				>{/each}</pre>
+		<div class="console-row">
+			<span class="prompt">›</span>
+			<input
+				bind:value={lineIn}
+				onkeydown={onConsoleKey}
+				placeholder="type Haskell or :commands, Enter evaluates"
+				aria-label="console input"
+			/>
+		</div>
+	</section>
 </main>
 
 <style>
-	.logo.vite:hover {
-		filter: drop-shadow(0 0 2em #747bff);
-	}
-
-	.logo.svelte-kit:hover {
-		filter: drop-shadow(0 0 2em #ff3e00);
-	}
-
-	:root {
-		font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-		font-size: 16px;
-		line-height: 24px;
-		font-weight: 400;
-
-		color: #0f0f0f;
-		background-color: #f6f6f6;
-
-		font-synthesis: none;
-		text-rendering: optimizeLegibility;
-		-webkit-font-smoothing: antialiased;
-		-moz-osx-font-smoothing: grayscale;
-		-webkit-text-size-adjust: 100%;
-	}
-
-	.container {
+	:global(body) {
 		margin: 0;
-		padding-top: 10vh;
+		font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
+	}
+
+	header {
 		display: flex;
-		flex-direction: column;
-		justify-content: center;
-		text-align: center;
-	}
-
-	.logo {
-		height: 6em;
-		padding: 1.5em;
-		will-change: filter;
-		transition: 0.75s;
-	}
-
-	.logo.tauri:hover {
-		filter: drop-shadow(0 0 2em #24c8db);
-	}
-
-	.row {
-		display: flex;
-		justify-content: center;
-	}
-
-	a {
-		font-weight: 500;
-		color: #646cff;
-		text-decoration: inherit;
-	}
-
-	a:hover {
-		color: #535bf2;
+		align-items: center;
+		gap: 1rem;
+		padding: 0.45rem 1rem;
+		border-bottom: 1px solid color-mix(in srgb, currentColor 20%, transparent);
 	}
 
 	h1 {
-		text-align: center;
+		font-size: 1.05rem;
+		margin: 0;
 	}
 
-	input,
-	button {
-		border-radius: 8px;
-		border: 1px solid transparent;
-		padding: 0.6em 1.2em;
-		font-size: 1em;
-		font-weight: 500;
-		font-family: inherit;
-		color: #0f0f0f;
-		background-color: #ffffff;
-		transition: border-color 0.25s;
-		box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
+	.chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4rem;
+		font-size: 0.72rem;
+		padding: 0.18rem 0.6rem;
+		border-radius: 999px;
+		background: color-mix(in srgb, currentColor 10%, transparent);
 	}
 
-	button {
+	.dot {
+		width: 0.5rem;
+		height: 0.5rem;
+		border-radius: 50%;
+		background: #888;
+	}
+
+	.chip.ready .dot {
+		background: #2ecc71;
+	}
+	.chip.busy .dot,
+	.chip.starting .dot {
+		background: #f1c40f;
+		animation: pulse 0.8s infinite;
+	}
+	.chip.failed .dot {
+		background: #e74c3c;
+	}
+
+	@keyframes pulse {
+		50% {
+			opacity: 0.25;
+		}
+	}
+
+	.restart,
+	.tbtn {
+		font-size: 0.72rem;
+		padding: 0.15rem 0.7rem;
+		border-radius: 6px;
+		border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+		background: transparent;
+		color: inherit;
 		cursor: pointer;
 	}
 
-	button:hover {
-		border-color: #396cd8;
-	}
-	button:active {
-		border-color: #396cd8;
-		background-color: #e8e8e8;
+	.tools {
+		display: inline-flex;
+		gap: 0.35rem;
 	}
 
-	input,
-	button {
+	.file {
+		font-size: 0.78rem;
+		opacity: 0.85;
+		max-width: 22rem;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.star {
+		font-weight: 700;
+	}
+
+	main {
+		display: grid;
+		grid-template-columns: 3fr 2fr;
+		height: calc(100vh - 2.7rem);
+	}
+
+	.editor-pane,
+	.console-pane {
+		min-width: 0;
+		overflow: hidden;
+	}
+
+	.console-pane {
+		display: flex;
+		flex-direction: column;
+		gap: 0.4rem;
+		border-left: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+		padding: 0.5rem 0.75rem;
+		overflow: hidden;
+	}
+
+	.console-pane pre {
+		margin: 0;
+		flex: 1;
+		min-height: 0;
+		font-family: Menlo, Monaco, Consolas, monospace;
+		font-size: 0.78rem;
+		line-height: 1.45;
+		white-space: pre-wrap;
+		overflow-y: auto;
+	}
+
+	.console-row {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		padding-top: 0.3rem;
+		border-top: 1px solid color-mix(in srgb, currentColor 15%, transparent);
+	}
+
+	.console-row .prompt {
+		font-family: Menlo, monospace;
+		color: #2ecc71;
+	}
+
+	.console-row input {
+		flex: 1;
+		min-width: 0;
+		background: transparent;
+		border: none;
 		outline: none;
+		color: inherit;
+		font-family: Menlo, Monaco, Consolas, monospace;
+		font-size: 0.78rem;
 	}
 
-	#greet-input {
-		margin-right: 5px;
+	.stderr {
+		color: #e5484d;
+	}
+
+	.system {
+		color: #e8a33d;
+		font-style: italic;
 	}
 
 	@media (prefers-color-scheme: dark) {
-		:root {
-			color: #f6f6f6;
-			background-color: #2f2f2f;
+		:global(body) {
+			background-color: #1e1e24;
+			color: #eaeaea;
 		}
-
-		a:hover {
-			color: #24c8db;
-		}
-
-		input,
-		button {
-			color: #ffffff;
-			background-color: #0f0f0f98;
-		}
-		button:active {
-			background-color: #0f0f0f69;
+		.stderr {
+			color: #ff6369;
 		}
 	}
 </style>
