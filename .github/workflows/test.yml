@@ -68,18 +68,23 @@ jobs:
             ~/.ghc
             /usr/local/.ghcup
           key: ghcup-ghc-9.10.3-tidal-v2
-      - name: install ghcup + ghc 9.10.3 + cabal
+      - name: install ghc 9.10.3 + cabal (runner preinstalled ghcup)
         run: |
-          # GitHub's ubuntu runner image exports GHCUP_INSTALL_BASE_PREFIX=/usr/local
-          # (root-owned ghcup preinstall) — the bootstrap honors it and chmod fails
-          # (runs 39402114411, 39403299370). Override to $HOME explicitly. INSTALL_DIR
-          # is NOT a bootstrap variable (first fix attempt, no effect).
-          curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org \
-            | BOOTSTRAP_HASKELL_NONINTERACTIVE=1 BOOTSTRAP_HASKELL_MINIMAL=1 GHCUP_INSTALL_BASE_PREFIX="$HOME" sh
-          echo "$HOME/.ghcup/bin" >> "$GITHUB_PATH"
-          "$HOME/.ghcup/bin/ghcup" install ghc 9.10.3
-          "$HOME/.ghcup/bin/ghcup" install cabal latest
-          "$HOME/.ghcup/bin/ghcup" set ghc 9.10.3
+          # The ubuntu runner image ships ghcup under /usr/local/.ghcup (root-owned); the
+          # get-ghcup bootstrap collides with pre-seeded binaries there and in ~/.ghcup
+          # (3 failed runs). Take over the preinstall instead of installing ghcup at all.
+          sudo mkdir -p /usr/local/.ghcup
+          sudo chown -R "$USER" /usr/local/.ghcup
+          test -x /usr/local/.ghcup/bin/ghcup || { echo "image has no preinstalled ghcup?"; exit 1; }
+          echo "/usr/local/.ghcup/bin" >> "$GITHUB_PATH"
+          GH=/usr/local/.ghcup/bin/ghcup
+          "$GH" install ghc 9.10.3
+          "$GH" install cabal latest
+          "$GH" set ghc 9.10.3
+          "$GH" --version
+          ghc --version
+          cabal --version
+
       - name: install tidal
         run: |
           cabal update
