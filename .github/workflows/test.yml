@@ -69,10 +69,12 @@ jobs:
           key: cabal-ghc-9.10.3-tidal-v1
       - name: install ghcup + ghc 9.10.3 + cabal
         run: |
-          # INSTALL_DIR is mandatory on runners: default detection targets /usr/local
-          # and the post-download chmod fails with exit 2 (observed run 39402114411)
+          # GitHub's ubuntu runner image exports GHCUP_INSTALL_BASE_PREFIX=/usr/local
+          # (root-owned ghcup preinstall) — the bootstrap honors it and chmod fails
+          # (runs 39402114411, 39403299370). Override to $HOME explicitly. INSTALL_DIR
+          # is NOT a bootstrap variable (first fix attempt, no effect).
           curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org \
-            | BOOTSTRAP_HASKELL_NONINTERACTIVE=1 BOOTSTRAP_HASKELL_MINIMAL=1 INSTALL_DIR="$HOME/.ghcup" sh
+            | BOOTSTRAP_HASKELL_NONINTERACTIVE=1 BOOTSTRAP_HASKELL_MINIMAL=1 GHCUP_INSTALL_BASE_PREFIX="$HOME" sh
           echo "$HOME/.ghcup/bin" >> "$GITHUB_PATH"
           "$HOME/.ghcup/bin/ghcup" install ghc 9.10.3
           "$HOME/.ghcup/bin/ghcup" install cabal latest
