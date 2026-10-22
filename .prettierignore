@@ -3,3 +3,6 @@ build
 dist
 src-tauri/target
 .svelte-kit
+# Prettier's fallback parser for .scd is *markdown* — it rewrites SuperCollider code
+# (`__TIDE_MARKER__` → `**TIDE_MARKER**`, strips // comments and tabs).
+*.scd
