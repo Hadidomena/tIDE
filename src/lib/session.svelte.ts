@@ -11,7 +11,13 @@ export interface Chunk {
 
 type WireEvent =
 	| { kind: 'state'; state: SessionState }
-	| { kind: 'output'; stream: 'stdout' | 'stderr'; text: string };
+	| { kind: 'output'; stream: 'stdout' | 'stderr'; text: string }
+	| {
+			kind: 'engine';
+			engine: 'superdirt' | 'headless';
+			status: 'starting' | 'live' | 'down';
+			detail: string;
+	  };
 
 const MAX_CHUNKS = 2000;
 
@@ -36,6 +42,9 @@ class SessionModel {
 	private handle(ev: WireEvent) {
 		if (ev.kind === 'state') {
 			this.state = ev.state;
+			return;
+		}
+		if (ev.kind === 'engine') {
 			return;
 		}
 		this.push(ev.stream, ev.text);

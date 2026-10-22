@@ -7,6 +7,7 @@ pub mod toolchain;
 
 use tauri_plugin_sql::{Migration, MigrationKind};
 
+use engine::EngineLauncher;
 use project::{project_open, project_save};
 use session::{Session, session_eval, session_restart, session_start};
 use toolchain::toolchain_detect;
@@ -35,6 +36,7 @@ pub fn run() {
                 .build(),
         )
         .manage(Session::new())
+        .manage(EngineLauncher::new())
         .invoke_handler(tauri::generate_handler![
             greet,
             session_start,
@@ -50,6 +52,7 @@ pub fn run() {
             if let tauri::RunEvent::Exit = event {
                 use tauri::Manager;
                 app_handle.state::<Session>().stop();
+                app_handle.state::<EngineLauncher>().stop();
             }
         });
 }

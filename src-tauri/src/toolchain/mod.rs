@@ -221,6 +221,11 @@ fn quark_root(home: &Path) -> PathBuf {
     sclang_support_dir(home).join("downloaded-quarks")
 }
 
+pub fn find_sclang(override_path: Option<&str>) -> Option<PathBuf> {
+    let home = home_dir();
+    locate(override_path, "sclang", &sclang_dirs(&home))
+}
+
 pub(crate) fn parse_ghc_version(output: &str) -> Option<String> {
     let idx = output.find("version ")?;
     let candidate = output[idx + "version ".len()..].split_whitespace().next()?;

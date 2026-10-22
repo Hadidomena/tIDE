@@ -1,5 +1,6 @@
 pub mod process;
 
+use crate::engine::{Engine, EngineState};
 use process::{PROMPT_SETUP, is_ready, wrap_code};
 use serde::Serialize;
 use std::io::{Read, Write};
@@ -35,8 +36,18 @@ impl SessionState {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum SessionEvent {
-    State { state: SessionState },
-    Output { stream: &'static str, text: String },
+    State {
+        state: SessionState,
+    },
+    Output {
+        stream: &'static str,
+        text: String,
+    },
+    Engine {
+        engine: Engine,
+        status: EngineState,
+        detail: String,
+    },
 }
 
 enum Line {
@@ -496,6 +507,7 @@ mod tests {
                     state: SessionState::Failed,
                 } => return Err(format!("session failed, output so far: {out}")),
                 SessionEvent::State { state } => return Err(format!("unexpected state {state:?}")),
+                SessionEvent::Engine { .. } => {}
             }
         }
     }
