@@ -1,9 +1,10 @@
 pub mod process;
 
-use crate::engine::{Engine, EngineState};
-use process::{PROMPT_SETUP, is_ready, wrap_code};
+use crate::engine::{Engine, EngineLauncher, EngineState};
+use process::{PRELUDE, PROMPT_SETUP, is_ready, prelude_prompts, wrap_code};
 use serde::Serialize;
 use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
@@ -13,6 +14,10 @@ use tauri::{AppHandle, Emitter, State};
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const EVAL_TIMEOUT: Duration = Duration::from_secs(10);
+/// Engine boot (SuperDirt: sclang + SuperDirt + marker) can be slow on cold starts — a
+/// first-ever sclang launch compiles the whole class library (minutes); the launcher itself
+/// gives up at its own 120 s readiness timeout.
+const ENGINE_TIMEOUT: Duration = Duration::from_secs(150);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -56,7 +61,7 @@ enum Line {
 }
 
 enum Cmd {
-    Start,
+    Start(Engine, PathBuf),
     Restart,
     Stop,
     Eval(String),
@@ -92,6 +97,14 @@ impl Default for Session {
     }
 }
 
+impl Drop for Session {
+    fn drop(&mut self) {
+        // Blocking teardown on drop: tests panic mid-run and the app quits — neither may
+        // leave ghci or a synth server behind. `stop()` is a no-op when already stopped.
+        self.stop();
+    }
+}
+
 impl Session {
     pub fn new() -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel();
@@ -100,7 +113,9 @@ impl Session {
         let monitor_tx = cmd_tx.clone();
         let worker_evt = evt_tx.clone();
         let worker_state = Arc::clone(&state);
-        thread::spawn(move || worker_loop(cmd_rx, monitor_tx, worker_evt, worker_state));
+        // The launcher feeds the same event channel → one forwarder for the whole app.
+        let engine = EngineLauncher::new(evt_tx.clone());
+        thread::spawn(move || worker_loop(cmd_rx, monitor_tx, worker_evt, worker_state, engine));
         Self {
             cmd_tx,
             evt_rx: Mutex::new(Some(evt_rx)),
@@ -116,7 +131,8 @@ impl Session {
         let monitor_tx = cmd_tx.clone();
         let worker_evt = evt_tx.clone();
         let worker_state = Arc::clone(&state);
-        thread::spawn(move || worker_loop(cmd_rx, monitor_tx, worker_evt, worker_state));
+        let engine = EngineLauncher::new(evt_tx.clone());
+        thread::spawn(move || worker_loop(cmd_rx, monitor_tx, worker_evt, worker_state, engine));
         (
             Self {
                 cmd_tx,
@@ -137,8 +153,15 @@ impl Session {
             .map_err(|_| "session worker gone".to_string())
     }
 
-    pub fn start(&self) -> Result<(), String> {
-        self.send(Cmd::Start)
+    pub fn start(&self, engine: Engine, data_dir: PathBuf) -> Result<(), String> {
+        // Report Starting immediately (the command returns this state to the UI before the
+        // worker has run); the worker emits the authoritative State event next.
+        *self.state.lock().unwrap() = SessionState::Starting;
+        if let Err(e) = self.send(Cmd::Start(engine, data_dir)) {
+            *self.state.lock().unwrap() = SessionState::Stopped;
+            return Err(e);
+        }
+        Ok(())
     }
 
     pub fn eval(&self, code: String) -> Result<(), String> {
@@ -150,8 +173,11 @@ impl Session {
     }
 
     pub fn stop(&self) {
-        let _ = self.cmd_tx.send(Cmd::Stop);
-        let deadline = Instant::now() + Duration::from_secs(3);
+        if self.cmd_tx.send(Cmd::Stop).is_err() {
+            return; // worker gone — nothing to wait for
+        }
+        // Covers ghci teardown *and* the blocking engine stop (which alone may take ~10 s).
+        let deadline = Instant::now() + Duration::from_secs(15);
         while self.state() != SessionState::Stopped && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(20));
         }
@@ -172,13 +198,33 @@ impl Session {
 // ---------- commands ----------
 
 #[tauri::command]
-pub fn session_start(session: State<'_, Session>, app: AppHandle) -> Result<SessionState, String> {
+pub fn session_start(
+    engine: Option<String>,
+    session: State<'_, Session>,
+    app: AppHandle,
+) -> Result<SessionState, String> {
+    use tauri::Manager;
     session.attach_forwarder(&app);
     if matches!(
         session.state(),
         SessionState::Stopped | SessionState::Failed
     ) {
-        session.start()?;
+        // The frontend resolves "auto" via the detector (step 4) and passes a concrete kind;
+        // Rust stays DB-free by design.
+        let engine = match engine.as_deref() {
+            None | Some("superdirt") => Engine::SuperDirt,
+            Some("headless") => Engine::Headless,
+            Some(other) => {
+                return Err(format!(
+                    "unknown engine '{other}' (expected superdirt|headless)"
+                ));
+            }
+        };
+        let data_dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("app data dir unavailable: {e}"))?;
+        session.start(engine, data_dir)?;
     }
     Ok(session.state())
 }
@@ -346,53 +392,164 @@ fn launch(monitor_tx: &Sender<Cmd>, id: u32) -> Result<Active, String> {
     })
 }
 
-fn do_start(monitor_tx: &Sender<Cmd>, evt: &Events, id: u32) -> Result<Active, String> {
+fn wait_engine(launcher: &EngineLauncher) -> Result<(), String> {
+    let deadline = Instant::now() + ENGINE_TIMEOUT;
+    loop {
+        let status = launcher.status();
+        match status.state {
+            EngineState::Live => return Ok(()),
+            EngineState::Down => {
+                return Err(format!(
+                    "engine unavailable — {}. Install SuperCollider or use the headless engine (diagnostics pane lands in M2 step 4).",
+                    status.detail
+                ));
+            }
+            EngineState::Starting => {}
+        }
+        if Instant::now() >= deadline {
+            return Err("engine did not become live in time".to_string());
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn do_start(
+    engine: Engine,
+    data_dir: &Path,
+    launcher: &EngineLauncher,
+    monitor_tx: &Sender<Cmd>,
+    evt: &Events,
+    id: u32,
+) -> Result<Active, String> {
+    // Engine first: the session reaches Ready only once audio actually runs.
+    launcher
+        .start(engine, data_dir.to_path_buf(), None)
+        .map_err(|e| format!("engine start failed: {e}"))?;
+    wait_engine(launcher)?;
+
     let mut a = launch(monitor_tx, id)?;
     write_all(&mut a.stdin, PROMPT_SETUP)?;
     let mut acc = String::new();
-    let prompts = PROMPT_SETUP.matches('\n').count();
-    match pump(&mut a, evt, &mut acc, STARTUP_TIMEOUT, prompts) {
-        PumpOutcome::Done => Ok(a),
+    match pump(
+        &mut a,
+        evt,
+        &mut acc,
+        STARTUP_TIMEOUT,
+        PROMPT_SETUP.matches('\n').count(),
+    ) {
+        PumpOutcome::Done => {}
         PumpOutcome::Timeout => {
             let _ = a.child.lock().unwrap().kill();
-            Err("ghci startup timed out — check that `ghci` works in a terminal".to_string())
+            return Err(
+                "ghci startup timed out — check that `ghci` works in a terminal".to_string(),
+            );
         }
         PumpOutcome::Died => {
             let _ = a.child.lock().unwrap().kill();
-            Err("ghci closed during startup".to_string())
+            return Err("ghci closed during startup".to_string());
+        }
+    }
+
+    // Tidal prelude — separate statements, one prompt echo each (step-0 verified shape).
+    write_all(&mut a.stdin, PRELUDE)?;
+    let mut acc = String::new();
+    match pump(&mut a, evt, &mut acc, STARTUP_TIMEOUT, prelude_prompts()) {
+        PumpOutcome::Done => Ok(a),
+        PumpOutcome::Timeout => {
+            let _ = a.child.lock().unwrap().kill();
+            Err(
+                "Tidal prelude timed out — is Tidal installed? (`cabal install --lib tidal`, see README)"
+                    .to_string(),
+            )
+        }
+        PumpOutcome::Died => {
+            let _ = a.child.lock().unwrap().kill();
+            Err("ghci closed while loading the Tidal prelude".to_string())
         }
     }
 }
 
-fn worker_loop(cmd_rx: Receiver<Cmd>, monitor_tx: Sender<Cmd>, evt: Events, state: SharedState) {
+#[allow(clippy::too_many_arguments)]
+fn begin_session(
+    kind: Engine,
+    data_dir: &Path,
+    active: &mut Option<Active>,
+    next_id: &mut u32,
+    monitor_tx: &Sender<Cmd>,
+    evt: &Events,
+    state: &SharedState,
+    engine: &EngineLauncher,
+) {
+    kill(active);
+    engine.stop();
+    set_state(state, evt, SessionState::Starting);
+    match do_start(kind, data_dir, engine, monitor_tx, evt, *next_id) {
+        Ok(a) => {
+            *next_id += 1;
+            *active = Some(a);
+            set_state(state, evt, SessionState::Ready);
+        }
+        Err(reason) => {
+            emit_output(evt, "stderr", reason);
+            engine.stop(); // never leave a half-booted synth behind a failed session
+            set_state(state, evt, SessionState::Failed);
+        }
+    }
+}
+
+fn worker_loop(
+    cmd_rx: Receiver<Cmd>,
+    monitor_tx: Sender<Cmd>,
+    evt: Events,
+    state: SharedState,
+    engine: EngineLauncher,
+) {
     let mut active: Option<Active> = None;
     let mut next_id: u32 = 0;
+    let mut config: Option<(Engine, PathBuf)> = None;
 
     loop {
         let cmd = match cmd_rx.recv() {
             Ok(c) => c,
             Err(_) => {
                 kill(&mut active); // session dropped (app exit)
+                engine.stop();
                 break;
             }
         };
 
         match cmd {
-            Cmd::Start | Cmd::Restart => {
-                kill(&mut active);
-                set_state(&state, &evt, SessionState::Starting);
-                match do_start(&monitor_tx, &evt, next_id) {
-                    Ok(a) => {
-                        next_id += 1;
-                        active = Some(a);
-                        set_state(&state, &evt, SessionState::Ready);
-                    }
-                    Err(reason) => {
-                        emit_output(&evt, "stderr", reason);
-                        set_state(&state, &evt, SessionState::Failed);
-                    }
-                }
+            Cmd::Start(kind, data_dir) => {
+                config = Some((kind, data_dir.clone()));
+                begin_session(
+                    kind,
+                    &data_dir,
+                    &mut active,
+                    &mut next_id,
+                    &monitor_tx,
+                    &evt,
+                    &state,
+                    &engine,
+                );
             }
+
+            Cmd::Restart => match config.clone() {
+                Some((kind, data_dir)) => begin_session(
+                    kind,
+                    &data_dir,
+                    &mut active,
+                    &mut next_id,
+                    &monitor_tx,
+                    &evt,
+                    &state,
+                    &engine,
+                ),
+                None => emit_output(
+                    &evt,
+                    "stderr",
+                    "nothing to restart — start the session first".to_string(),
+                ),
+            },
 
             Cmd::Eval(code) => {
                 let frame = wrap_code(&code);
@@ -435,12 +592,14 @@ fn worker_loop(cmd_rx: Receiver<Cmd>, monitor_tx: Sender<Cmd>, evt: Events, stat
                 if live && active.as_ref().is_some_and(|a| a.id == id) {
                     emit_output(&evt, "stderr", format!("ghci exited: {reason}"));
                     kill(&mut active);
+                    engine.stop();
                     set_state(&state, &evt, SessionState::Failed);
                 }
             }
 
             Cmd::Stop => {
                 kill(&mut active);
+                engine.stop();
                 set_state(&state, &evt, SessionState::Stopped);
             }
         }
@@ -512,14 +671,29 @@ mod tests {
         }
     }
 
+    fn drain_events(rx: &mut Receiver<SessionEvent>) -> String {
+        let mut log = String::new();
+        while let Ok(ev) = rx.recv_timeout(Duration::from_millis(100)) {
+            match ev {
+                SessionEvent::Output { text, .. } => log.push_str(&text),
+                SessionEvent::Engine { detail, status, .. } => {
+                    log.push_str(&format!("[engine {status:?}] {detail}\n"));
+                }
+                SessionEvent::State { state } => log.push_str(&format!("[state {state:?}]\n")),
+            }
+        }
+        log
+    }
+
     #[test]
     #[ignore = "requires working ghci + tidal (m1-plan step 0 probe must print TIDAL-PROBE-OK)"]
     fn stateful_ghci_session() {
         let (sess, mut rx) = Session::for_test();
-        sess.start().unwrap();
+        sess.start(Engine::Headless, std::env::temp_dir()).unwrap();
         assert!(
-            wait_for_state(&sess, SessionState::Ready, 60),
-            "ghci startup timed out"
+            wait_for_state(&sess, SessionState::Ready, 90),
+            "ghci startup timed out; events:\n{}",
+            drain_events(&mut rx)
         );
 
         let out = run_eval(&sess, &mut rx, "1+1").unwrap();
@@ -545,5 +719,71 @@ mod tests {
         sess.stop();
         assert!(wait_for_state(&sess, SessionState::Stopped, 10));
         drop(sess);
+    }
+
+    /// M2 step 3 exit criterion: the headless engine still boots the Tidal prelude —
+    /// `d1..d8` and `hush` are bound without any SuperCollider on the machine. CI-safe.
+    #[test]
+    #[ignore = "requires working ghci + tidal (headless prelude, no audio device needed)"]
+    fn headless_session_prelude() {
+        let (sess, mut rx) = Session::for_test();
+        sess.start(Engine::Headless, std::env::temp_dir()).unwrap();
+        assert!(
+            wait_for_state(&sess, SessionState::Ready, 90),
+            "headless session startup timed out (prelude not verified); events:\n{}",
+            drain_events(&mut rx)
+        );
+
+        let out = run_eval(&sess, &mut rx, ":t d1").unwrap();
+        assert!(
+            out.contains("d1 ::") && out.contains("ControlPattern"),
+            "expected d1 to be bound by the prelude, got: {out}"
+        );
+
+        let out = run_eval(&sess, &mut rx, ":t hush").unwrap();
+        assert!(
+            out.contains("hush ::"),
+            "expected hush to be bound by the prelude, got: {out}"
+        );
+
+        sess.stop();
+        assert!(wait_for_state(&sess, SessionState::Stopped, 15));
+    }
+
+    /// Full stack on a real machine: SuperDirt engine + ghci session + prelude, then a
+    /// pattern eval and hush. Sound itself needs ears; this proves the pipeline is error-free.
+    #[test]
+    #[ignore = "requires SuperCollider + ghci/tidal — full engine+session smoke (~20 s)"]
+    fn superdirt_session_smoke() {
+        let (sess, mut rx) = Session::for_test();
+        let data_dir =
+            std::env::temp_dir().join(format!("tide-session-smoke-{}", std::process::id()));
+        sess.start(Engine::SuperDirt, data_dir.clone()).unwrap();
+        assert!(
+            wait_for_state(&sess, SessionState::Ready, 120),
+            "superdirt session startup timed out; events:\n{}",
+            drain_events(&mut rx)
+        );
+
+        // Owner manual test (2026-10-25): SuperDirt.start does not load samples — the boot
+        // script must call loadSoundFiles with the detected Dirt-Samples dir, or every
+        // `s "bd"` fails with "no synth or sample named 'bd'".
+        let boot_log = drain_events(&mut rx);
+        assert!(
+            boot_log.contains("tIDE: loading samples from") && boot_log.contains("Dirt-Samples"),
+            "boot script did not load the sample library; engine log:\n{boot_log}"
+        );
+
+        let out = run_eval(&sess, &mut rx, "d1 $ s \"bd\"").unwrap();
+        assert!(
+            !out.to_lowercase().contains("error"),
+            "pattern eval reported an error: {out}"
+        );
+
+        run_eval(&sess, &mut rx, "hush").unwrap();
+
+        sess.stop();
+        assert!(wait_for_state(&sess, SessionState::Stopped, 20));
+        let _ = std::fs::remove_dir_all(&data_dir);
     }
 }

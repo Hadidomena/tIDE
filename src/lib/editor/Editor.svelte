@@ -12,9 +12,10 @@
 	interface Props {
 		content?: string;
 		onEval?: (code: string) => void;
+		onHush?: () => void;
 	}
 
-	let { content = $bindable(''), onEval = () => {} }: Props = $props();
+	let { content = $bindable(''), onEval = () => {}, onHush = () => {} }: Props = $props();
 
 	let host: HTMLDivElement | undefined = $state();
 	let view: EditorView | undefined;
@@ -35,6 +36,12 @@
 		return v.state.doc.lineAt(from).text;
 	}
 
+	function evalLineOrSelection(v: EditorView): boolean {
+		const code = lineOrSelection(v).trim();
+		if (code) onEval(code);
+		return true;
+	}
+
 	$effect(() => {
 		if (!host) return;
 		view = new EditorView({
@@ -44,17 +51,31 @@
 				extensions: [
 					basicSetup,
 					tidalSupport,
-					keymap.of([
-						{
-							key: 'Mod-Enter',
-							preventDefault: true,
-							run: (v) => {
-								const code = lineOrSelection(v).trim();
-								if (code) onEval(code);
-								return true;
+					// Prec.high is required: basicSetup's defaultKeymap binds Mod-Enter to
+					// insertBlankLine, so a normal-precedence keymap never sees the key.
+					Prec.high(
+						keymap.of([
+							{
+								key: 'Mod-Enter',
+								preventDefault: true,
+								run: evalLineOrSelection
+							},
+							{
+								// alias for macOS muscle memory (Mod is Cmd there)
+								key: 'Ctrl-Enter',
+								preventDefault: true,
+								run: evalLineOrSelection
+							},
+							{
+								key: 'Mod-.',
+								preventDefault: true,
+								run: () => {
+									onHush();
+									return true;
+								}
 							}
-						}
-					]),
+						])
+					),
 					EditorView.updateListener.of((u) => {
 						if (u.docChanged) content = u.state.doc.toString();
 					})

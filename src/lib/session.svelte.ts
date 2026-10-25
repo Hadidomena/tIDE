@@ -68,10 +68,15 @@ class SessionModel {
 
 	async start() {
 		try {
-			this.state = await invoke<SessionState>('session_start');
+			this.state = await invoke<SessionState>('session_start', { engine: null });
 		} catch (e) {
 			this.push('system', `start failed: ${String(e)}\n`);
 		}
+	}
+
+	async hush() {
+		this.echo('hush');
+		await this.eval('hush');
 	}
 
 	async eval(code: string) {

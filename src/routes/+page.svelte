@@ -9,12 +9,11 @@
 	} from '$lib/project.svelte';
 	import { session } from '$lib/session.svelte';
 
-	let buffer = $state(`-- tIDE — live GHCi session (M1 step 3)
+	let buffer = $state(`-- tIDE — live GHCi session with SuperDirt (M2)
 -- Cmd/Ctrl+Enter evaluates the current line or selection.
--- Try it: 1+1 · then let zz = 5*5 · then zz + 1  (stateful!)
+-- Cmd/Ctrl+. (or the hush button) silences every running pattern.
 
-slow 2 $ sound "bd sn:1 ~ hh"
--- the d1/slow eval prints "not in scope" until M2 boots a synth context
+d1 $ s "bd sn:1 ~ hh"
 `);
 
 	let consoleEl: HTMLPreElement | undefined = $state();
@@ -92,6 +91,10 @@ slow 2 $ sound "bd sn:1 ~ hh"
 		void session.eval(code);
 	}
 
+	function handleHush() {
+		void session.hush();
+	}
+
 	function onConsoleKey(e: KeyboardEvent) {
 		if (e.key !== 'Enter') return;
 		const code = lineIn.trim();
@@ -118,6 +121,13 @@ slow 2 $ sound "bd sn:1 ~ hh"
 		{#if project.hasLast}
 			<button class="tbtn" type="button" onclick={doOpenLast}>last</button>
 		{/if}
+		<button
+			class="tbtn"
+			type="button"
+			title="silence all patterns (Cmd/Ctrl+.)"
+			disabled={session.state !== 'ready'}
+			onclick={handleHush}>hush</button
+		>
 	</div>
 	<span class="chip {session.state}">
 		<span class="dot"></span>
@@ -130,7 +140,7 @@ slow 2 $ sound "bd sn:1 ~ hh"
 
 <main>
 	<section class="editor-pane" aria-label="code editor">
-		<Editor bind:content={buffer} onEval={handleEval} />
+		<Editor bind:content={buffer} onEval={handleEval} onHush={handleHush} />
 	</section>
 	<section class="console-pane" aria-label="console">
 		<pre
@@ -213,6 +223,11 @@ slow 2 $ sound "bd sn:1 ~ hh"
 		background: transparent;
 		color: inherit;
 		cursor: pointer;
+	}
+
+	.tbtn:disabled {
+		opacity: 0.4;
+		cursor: default;
 	}
 
 	.tools {

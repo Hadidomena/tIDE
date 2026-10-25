@@ -226,6 +226,13 @@ pub fn find_sclang(override_path: Option<&str>) -> Option<PathBuf> {
     locate(override_path, "sclang", &sclang_dirs(&home))
 }
 
+/// Dirt-Samples root (one directory per sample group). The engine boot script feeds this to
+/// `~dirt.loadSoundFiles` — SuperDirt's `start` does NOT load samples itself.
+pub fn find_dirt_samples() -> Option<PathBuf> {
+    let dir = quark_root(&home_dir()).join("Dirt-Samples");
+    dir.is_dir().then_some(dir)
+}
+
 pub(crate) fn parse_ghc_version(output: &str) -> Option<String> {
     let idx = output.find("version ")?;
     let candidate = output[idx + "version ".len()..].split_whitespace().next()?;

@@ -7,14 +7,14 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
 
 use crate::session::SessionEvent;
 
 pub const OSC_PORT: u16 = 57120;
-const READY_TIMEOUT: Duration = Duration::from_secs(45);
+const READY_TIMEOUT: Duration = Duration::from_secs(120);
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
 const MARKER_PLACEHOLDER: &str = "__TIDE_MARKER__";
+const SAMPLES_PLACEHOLDER: &str = "__TIDE_SAMPLES__";
 const BOOT_SCRIPT: &str = include_str!("../../resources/boot-superdirt.scd");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -62,45 +62,24 @@ struct Running {
 
 pub struct EngineLauncher {
     cmd_tx: Sender<Cmd>,
-    evt_rx: Mutex<Option<Receiver<SessionEvent>>>,
     status: Arc<Mutex<EngineStatus>>,
 }
 
-impl Default for EngineLauncher {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl EngineLauncher {
-    pub fn new() -> Self {
+    /// `sink` is the session's event channel (M2 step 3): engine frames ride the same
+    /// `session://event` stream, so the app needs exactly one forwarder.
+    pub fn new(sink: Sender<SessionEvent>) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel();
-        let (evt_tx, evt_rx) = mpsc::channel();
         let status: Arc<Mutex<EngineStatus>> = Arc::new(Mutex::new(EngineStatus::default()));
         let worker_status = Arc::clone(&status);
-        thread::spawn(move || worker_loop(cmd_rx, evt_tx, worker_status));
-        Self {
-            cmd_tx,
-            evt_rx: Mutex::new(Some(evt_rx)),
-            status,
-        }
+        thread::spawn(move || worker_loop(cmd_rx, sink, worker_status));
+        Self { cmd_tx, status }
     }
 
     #[cfg(test)]
     pub fn for_test() -> (Self, Receiver<SessionEvent>) {
-        let (cmd_tx, cmd_rx) = mpsc::channel();
-        let (evt_tx, evt_rx) = mpsc::channel();
-        let status: Arc<Mutex<EngineStatus>> = Arc::new(Mutex::new(EngineStatus::default()));
-        let worker_status = Arc::clone(&status);
-        thread::spawn(move || worker_loop(cmd_rx, evt_tx, worker_status));
-        (
-            Self {
-                cmd_tx,
-                evt_rx: Mutex::new(None),
-                status,
-            },
-            evt_rx,
-        )
+        let (sink, rx) = mpsc::channel();
+        (Self::new(sink), rx)
     }
 
     pub fn status(&self) -> EngineStatus {
@@ -113,27 +92,30 @@ impl EngineLauncher {
         data_dir: PathBuf,
         sclang_override: Option<String>,
     ) -> Result<(), String> {
+        // Mark Starting *before* dispatching: the session boot polls `status()` right after
+        // start(), and the previous state is `Down` — without this it would read a stale
+        // "engine unavailable" before the worker even picked up the command.
+        set_status(
+            &self.status,
+            Some(engine),
+            EngineState::Starting,
+            "starting",
+        );
         self.cmd_tx
             .send(Cmd::Start(engine, data_dir, sclang_override))
             .map_err(|_| "engine worker gone".to_string())
     }
 
     pub fn stop(&self) {
+        if self.status().state == EngineState::Down {
+            // Nothing running: queueing a Stop here would land *after* a following start()
+            // and flip the freshly-set Starting back to Down (observed race in step 3).
+            return;
+        }
         let _ = self.cmd_tx.send(Cmd::Stop);
         let deadline = Instant::now() + Duration::from_secs(10);
         while self.status().state != EngineState::Down && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(20));
-        }
-    }
-
-    pub fn attach_forwarder(&self, app: &AppHandle) {
-        if let Some(rx) = self.evt_rx.lock().unwrap().take() {
-            let app = app.clone();
-            thread::spawn(move || {
-                while let Ok(ev) = rx.recv() {
-                    let _ = app.emit("session://event", &ev);
-                }
-            });
         }
     }
 }
@@ -267,9 +249,38 @@ fn start_superdirt(
     }
     let marker = engine_dir.join("ready.txt");
     let _ = std::fs::remove_file(&marker);
+    let samples = crate::toolchain::find_dirt_samples();
     let script = engine_dir.join("boot-superdirt.scd");
-    if let Err(e) = std::fs::write(&script, render_boot_script(&marker)) {
+    if let Err(e) = std::fs::write(&script, render_boot_script(&marker, samples.as_deref())) {
         return fail(evt, status, format!("cannot write boot script: {e}"));
+    }
+
+    if port_held(OSC_PORT) {
+        // sclang always binds 57120 as its language port, so a busy port means another
+        // SuperCollider/sclang is running. If it is *our own* stale engine (script path
+        // matches this data dir — e.g. an app killed with Ctrl+C, which skips the Exit
+        // hook), reap its process group and retry. Anything else fails with a clear hint.
+        let reaped = reap_stale_engines(&script);
+        if reaped > 0 {
+            emit_output(
+                evt,
+                format!("tIDE: cleaned up {reaped} stale engine process(es) from a previous run\n"),
+            );
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while port_held(OSC_PORT) && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(50));
+            }
+        }
+        if port_held(OSC_PORT) {
+            return fail(
+                evt,
+                status,
+                format!(
+                    "OSC port {OSC_PORT} is already in use — another sclang/SuperCollider is running. \
+                     Quit it (`pkill sclang`) and restart the session, or use the headless engine."
+                ),
+            );
+        }
     }
 
     let Some(sclang) = crate::toolchain::find_sclang(sclang_override.as_deref()) else {
@@ -324,9 +335,7 @@ fn start_superdirt(
     let child = Arc::new(Mutex::new(child));
     let deadline = Instant::now() + READY_TIMEOUT;
     loop {
-        while let Ok(text) = lines.try_recv() {
-            emit_output(evt, text);
-        }
+        drain_output(&lines, evt);
         if let Ok(content) = std::fs::read_to_string(&marker) {
             let content = content.trim();
             if content == "ready" {
@@ -395,8 +404,24 @@ fn shutdown(
 }
 
 fn drain(run: &Running, evt: &Sender<SessionEvent>) {
-    while let Ok(text) = run.lines.try_recv() {
-        emit_output(evt, text);
+    drain_output(&run.lines, evt);
+}
+
+/// Emit queued sclang output as **few, bounded** events. Per-chunk events at the rate a
+/// failing sample load produces (a stack trace per file) lock up the webview — batching
+/// keeps the console responsive while still streaming promptly (the worker loops every
+/// 200 ms and flushes whatever it has).
+fn drain_output(lines: &Receiver<String>, evt: &Sender<SessionEvent>) {
+    const BATCH: usize = 32 * 1024;
+    let mut batch = String::new();
+    while let Ok(text) = lines.try_recv() {
+        batch.push_str(&text);
+        if batch.len() >= BATCH {
+            emit_output(evt, std::mem::take(&mut batch));
+        }
+    }
+    if !batch.is_empty() {
+        emit_output(evt, batch);
     }
 }
 
@@ -454,6 +479,42 @@ fn kill_group(child: &Arc<Mutex<Child>>) {
     let _ = guard.wait();
 }
 
+/// SIGTERM every process whose command line contains our boot-script path (i.e. a sclang
+/// from a previous tIDE run — the path is unique to this app-data dir), then their process
+/// groups. Returns how many were signalled. Used only when 57120 is already taken.
+#[cfg(unix)]
+fn reap_stale_engines(script: &Path) -> usize {
+    let Ok(output) = Command::new("pgrep")
+        .args(["-f", &script.to_string_lossy()])
+        .output()
+    else {
+        return 0;
+    };
+    let mut signalled = 0;
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        if let Ok(pid) = line.trim().parse::<i32>() {
+            // process_group(0) made pid the pgid → this reaps the scsynth grandchild too.
+            let _ = unsafe { libc::kill(-pid, libc::SIGTERM) };
+            let _ = unsafe { libc::kill(pid, libc::SIGTERM) };
+            signalled += 1;
+        }
+    }
+    if signalled > 0 {
+        thread::sleep(Duration::from_millis(500));
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            if let Ok(pid) = line.trim().parse::<i32>() {
+                let _ = unsafe { libc::kill(-pid, libc::SIGKILL) };
+            }
+        }
+    }
+    signalled
+}
+
+#[cfg(not(unix))]
+fn reap_stale_engines(_script: &Path) -> usize {
+    0
+}
+
 fn port_held(port: u16) -> bool {
     match std::net::UdpSocket::bind(("127.0.0.1", port)) {
         Ok(socket) => {
@@ -464,11 +525,16 @@ fn port_held(port: u16) -> bool {
     }
 }
 
-fn render_boot_script(marker: &Path) -> String {
-    BOOT_SCRIPT.replace(
-        MARKER_PLACEHOLDER,
-        &escape_sc_string(&marker.display().to_string()),
-    )
+fn render_boot_script(marker: &Path, samples: Option<&Path>) -> String {
+    let samples = samples
+        .map(|dir| escape_sc_string(&dir.display().to_string()))
+        .unwrap_or_default();
+    BOOT_SCRIPT
+        .replace(
+            MARKER_PLACEHOLDER,
+            &escape_sc_string(&marker.display().to_string()),
+        )
+        .replace(SAMPLES_PLACEHOLDER, &samples)
 }
 
 fn escape_sc_string(raw: &str) -> String {
@@ -480,11 +546,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn boot_script_embeds_escaped_marker_path() {
-        let script = render_boot_script(Path::new(r#"C:\Users\me\"tIDE"\ready.txt"#));
+    fn boot_script_embeds_escaped_paths() {
+        let script = render_boot_script(
+            Path::new(r#"C:\Users\me\"tIDE"\ready.txt"#),
+            Some(Path::new(r#"C:\Users\me\samples"#)),
+        );
         assert!(!script.contains(MARKER_PLACEHOLDER));
+        assert!(!script.contains(SAMPLES_PLACEHOLDER));
         assert!(script.contains(r#""C:\\Users\\me\\\"tIDE\"\\ready.txt""#));
+        assert!(script.contains(r#""C:\\Users\\me\\samples""#));
         assert!(script.contains("SuperDirt(2, s)"));
+        assert!(script.contains("loadSoundFiles"));
+        assert!(script.contains("numInputBusChannels = 0"));
+        assert!(script.contains("numBuffers = 1024 * 256"));
+        assert!(script.contains("maxNodes = 1024 * 32"));
+
+        // Without a samples dir the script must still be valid and explicit about silence.
+        let headless_script = render_boot_script(Path::new("/tmp/ready.txt"), None);
+        assert!(!headless_script.contains(SAMPLES_PLACEHOLDER));
+        assert!(headless_script.contains("no Dirt-Samples directory configured"));
     }
 
     #[test]
