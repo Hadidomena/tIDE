@@ -2,16 +2,39 @@
 
 tIDE is an integrated development environment for the Tidal language.
 
-**Status:** scaffold — Tauri v2 + Svelte 5 + TypeScript shell with a wired SQLite schema.
-The editor/REPL engine, sample library, transforms and pattern analyzer land in future steps.
+**Status:** M2 — editor with Tidal highlighting, live GHCi session, SuperDirt/headless engine
+orchestration, toolchain detection + diagnostics, project open/save. Sample library, transforms
+and pattern analysis land in later milestones.
 
 ## Prerequisites
+
+**Build tooling**
 
 - **Node.js (LTS)** — via [mise](https://mise.jdx.dev): `mise use -g node@lts`
 - **Rust** (stable) — `rustup`
 - **Lefthook** — `brew install lefthook` (macOS); git hooks are mandatory in this repo
-- For using tIDE itself: a working **GHC + Tidal** install, optionally **SuperCollider + SuperDirt**
-  (the app detects these and diagnoses problems — see the Diagnostics pane once M2 lands)
+
+**To actually run Tidal code (detected and diagnosed by the app)**
+
+1. **GHC + cabal** via [ghcup](https://www.haskell.org/ghcup/), then:
+   ```sh
+   brew install cmake                      # tidal-link's native build needs it (apt: cmake)
+   cabal update && cabal install --lib tidal
+   ```
+   The `--lib` flag is required: plain `cabal install` registers no library for GHCi.
+   Note: `ghc-pkg list` will not show this install (cabal uses a GHC environment file) — tIDE's
+   detector accounts for that.
+   Verify: `echo ':q' | ghci -package tidal -e 'import Sound.Tidal.Context'`
+2. **SuperCollider + SuperDirt** (optional — without it tIDE runs in _headless_ mode: evaluation
+   works, no sound):
+   ```sh
+   brew install --cask supercollider      # Linux: distribution package
+   ```
+   Then in the SuperCollider IDE install the **SuperDirt** quark (Quarks menu). It downloads the
+   Dirt-Samples pack (~400 MB). tIDE starts/stops SuperCollider itself; you don't need to run the
+   IDE while using tIDE.
+
+Open the **Diagnostics** pane in the app to see exactly what is detected and what to install.
 
 ## Quickstart (development)
 
@@ -22,6 +45,10 @@ lefthook install          # one-time; installs pre-commit / commit-msg / pre-pus
 npm install
 npm run tauri dev         # opens the app window (use the native window)
 ```
+
+In the window: `Cmd/Ctrl+Enter` evaluates the current line or selection, `Cmd/Ctrl+.` (or the
+hush button) silences all patterns. The engine is selected in Diagnostics: `auto` (SuperDirt when
+detected, otherwise headless), or explicitly `superdirt` / `headless`.
 
 Useful scripts: `npm run lint` (ESLint), `npm run format` (Prettier), `npm run check`
 (svelte-check), and `cd src-tauri && cargo test` / `cargo clippy --all-targets -- -D warnings`.
