@@ -5,30 +5,32 @@ export type SessionState = 'stopped' | 'starting' | 'ready' | 'busy' | 'failed';
 
 export interface Chunk {
 	id: number;
-	stream: 'stdout' | 'stderr' | 'system';
+	stream: 'stdout' | 'stderr' | 'system' | 'engine';
 	text: string;
+}
+
+export interface EngineStatus {
+	engine: 'superdirt' | 'headless';
+	status: 'starting' | 'live' | 'down';
+	detail: string;
 }
 
 type WireEvent =
 	| { kind: 'state'; state: SessionState }
-	| { kind: 'output'; stream: 'stdout' | 'stderr'; text: string }
-	| {
-			kind: 'engine';
-			engine: 'superdirt' | 'headless';
-			status: 'starting' | 'live' | 'down';
-			detail: string;
-	  };
+	| { kind: 'output'; stream: 'stdout' | 'stderr' | 'engine'; text: string }
+	| ({ kind: 'engine' } & EngineStatus);
 
 const MAX_CHUNKS = 2000;
 
 class SessionModel {
 	state = $state<SessionState>('stopped');
+	engine = $state<EngineStatus | null>(null);
 	chunks = $state<Chunk[]>([]);
 	private connected = false;
 	private unlisten: UnlistenFn | undefined;
 	private seq = 0;
 
-	async connect() {
+	async connect(engine: string | null = null) {
 		if (this.connected) return;
 		if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
 			this.push('system', 'not a Tauri window — use the app window from `npm run tauri dev`\n');
@@ -36,7 +38,7 @@ class SessionModel {
 		}
 		this.connected = true;
 		this.unlisten = await listen<WireEvent>('session://event', (e) => this.handle(e.payload));
-		await this.start();
+		await this.start(engine);
 	}
 
 	private handle(ev: WireEvent) {
@@ -45,6 +47,7 @@ class SessionModel {
 			return;
 		}
 		if (ev.kind === 'engine') {
+			this.engine = { engine: ev.engine, status: ev.status, detail: ev.detail };
 			return;
 		}
 		this.push(ev.stream, ev.text);
@@ -66,9 +69,9 @@ class SessionModel {
 		}
 	}
 
-	async start() {
+	async start(engine: string | null = null) {
 		try {
-			this.state = await invoke<SessionState>('session_start', { engine: null });
+			this.state = await invoke<SessionState>('session_start', { engine });
 		} catch (e) {
 			this.push('system', `start failed: ${String(e)}\n`);
 		}
@@ -94,9 +97,9 @@ class SessionModel {
 		this.push('system', text.endsWith('\n') ? text : `${text}\n`);
 	}
 
-	async restart() {
+	async restart(engine: string | null = null) {
 		try {
-			this.state = await invoke<SessionState>('session_restart');
+			this.state = await invoke<SessionState>('session_restart', { engine });
 		} catch (e) {
 			this.push('system', `restart failed: ${String(e)}\n`);
 		}

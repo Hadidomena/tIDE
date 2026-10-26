@@ -62,7 +62,7 @@ enum Line {
 
 enum Cmd {
     Start(Engine, PathBuf),
-    Restart,
+    Restart(Option<Engine>, PathBuf),
     Stop,
     Eval(String),
     Death { id: u32, reason: String },
@@ -168,8 +168,9 @@ impl Session {
         self.send(Cmd::Eval(code))
     }
 
-    pub fn restart(&self) -> Result<(), String> {
-        self.send(Cmd::Restart)
+    pub fn restart(&self, engine: Option<Engine>, data_dir: PathBuf) -> Result<(), String> {
+        *self.state.lock().unwrap() = SessionState::Starting;
+        self.send(Cmd::Restart(engine, data_dir))
     }
 
     pub fn stop(&self) {
@@ -243,8 +244,27 @@ pub fn session_eval(code: String, session: State<'_, Session>) -> Result<Session
 }
 
 #[tauri::command]
-pub fn session_restart(session: State<'_, Session>) -> Result<SessionState, String> {
-    session.restart()?;
+pub fn session_restart(
+    engine: Option<String>,
+    session: State<'_, Session>,
+    app: AppHandle,
+) -> Result<SessionState, String> {
+    use tauri::Manager;
+    let engine = match engine.as_deref() {
+        None => None,
+        Some("superdirt") => Some(Engine::SuperDirt),
+        Some("headless") => Some(Engine::Headless),
+        Some(other) => {
+            return Err(format!(
+                "unknown engine '{other}' (expected superdirt|headless)"
+            ));
+        }
+    };
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app data dir unavailable: {e}"))?;
+    session.restart(engine, data_dir)?;
     Ok(session.state())
 }
 
@@ -533,23 +553,32 @@ fn worker_loop(
                 );
             }
 
-            Cmd::Restart => match config.clone() {
-                Some((kind, data_dir)) => begin_session(
-                    kind,
-                    &data_dir,
-                    &mut active,
-                    &mut next_id,
-                    &monitor_tx,
-                    &evt,
-                    &state,
-                    &engine,
-                ),
-                None => emit_output(
-                    &evt,
-                    "stderr",
-                    "nothing to restart — start the session first".to_string(),
-                ),
-            },
+            Cmd::Restart(engine_kind, data_dir) => {
+                let target = match engine_kind {
+                    Some(kind) => {
+                        config = Some((kind, data_dir.clone()));
+                        Some((kind, data_dir))
+                    }
+                    None => config.clone(),
+                };
+                match target {
+                    Some((kind, dir)) => begin_session(
+                        kind,
+                        &dir,
+                        &mut active,
+                        &mut next_id,
+                        &monitor_tx,
+                        &evt,
+                        &state,
+                        &engine,
+                    ),
+                    None => emit_output(
+                        &evt,
+                        "stderr",
+                        "nothing to restart — start the session first".to_string(),
+                    ),
+                }
+            }
 
             Cmd::Eval(code) => {
                 let frame = wrap_code(&code);
@@ -710,7 +739,7 @@ mod tests {
         );
         assert_eq!(sess.state(), SessionState::Ready);
 
-        sess.restart().unwrap();
+        sess.restart(None, std::env::temp_dir()).unwrap();
         assert!(
             wait_for_state(&sess, SessionState::Ready, 60),
             "restart timed out"

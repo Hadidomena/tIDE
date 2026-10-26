@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import Editor from '$lib/editor/Editor.svelte';
 	import {
 		checkLastProject,
@@ -7,7 +8,17 @@
 		project,
 		saveProject
 	} from '$lib/project.svelte';
+	import {
+		detectToolchain,
+		diagnostics,
+		initDiagnostics,
+		resolveEngine,
+		setEngineChoice,
+		type EngineChoice
+	} from '$lib/diagnostics.svelte';
 	import { session } from '$lib/session.svelte';
+
+	const ENGINE_CHOICES: EngineChoice[] = ['auto', 'superdirt', 'headless'];
 
 	let buffer = $state(`-- tIDE — live GHCi session with SuperDirt (M2)
 -- Cmd/Ctrl+Enter evaluates the current line or selection.
@@ -22,8 +33,12 @@ d1 $ s "bd sn:1 ~ hh"
 	let lastSaved = $state('');
 	const dirty = $derived(buffer !== lastSaved);
 
-	$effect(() => {
-		void session.connect();
+	onMount(() => {
+		void (async () => {
+			await initDiagnostics();
+			await session.connect(resolveEngine());
+			void detectToolchain();
+		})();
 	});
 
 	$effect(() => {
@@ -95,6 +110,19 @@ d1 $ s "bd sn:1 ~ hh"
 		void session.hush();
 	}
 
+	async function copyHint(text: string) {
+		try {
+			await navigator.clipboard.writeText(text);
+			session.notify('hint copied to clipboard');
+		} catch {
+			session.notify(text);
+		}
+	}
+
+	function restartWithEngine() {
+		void session.restart(resolveEngine());
+	}
+
 	function onConsoleKey(e: KeyboardEvent) {
 		if (e.key !== 'Enter') return;
 		const code = lineIn.trim();
@@ -128,17 +156,29 @@ d1 $ s "bd sn:1 ~ hh"
 			disabled={session.state !== 'ready'}
 			onclick={handleHush}>hush</button
 		>
+		<button
+			class="tbtn"
+			type="button"
+			onclick={() => (diagnostics.open = !diagnostics.open)}
+			aria-pressed={diagnostics.open}>{diagnostics.open ? 'hide diag' : 'diagnostics'}</button
+		>
 	</div>
 	<span class="chip {session.state}">
 		<span class="dot"></span>
 		session: {session.state}
 	</span>
+	{#if session.engine}
+		<span class="chip {session.engine.status}" title={session.engine.detail}>
+			<span class="dot"></span>
+			engine: {session.engine.engine} · {session.engine.status}
+		</span>
+	{/if}
 	{#if session.state === 'failed' || session.state === 'stopped'}
-		<button class="restart" type="button" onclick={() => void session.restart()}>restart</button>
+		<button class="restart" type="button" onclick={restartWithEngine}>restart</button>
 	{/if}
 </header>
 
-<main>
+<main class:with-diag={diagnostics.open}>
 	<section class="editor-pane" aria-label="code editor">
 		<Editor bind:content={buffer} onEval={handleEval} onHush={handleHush} />
 	</section>
@@ -158,6 +198,66 @@ d1 $ s "bd sn:1 ~ hh"
 			/>
 		</div>
 	</section>
+	{#if diagnostics.open}
+		<aside class="diag" aria-label="diagnostics">
+			<div class="diag-head">
+				<strong>diagnostics</strong>
+				<button
+					class="tbtn"
+					type="button"
+					disabled={diagnostics.detecting}
+					onclick={() => void detectToolchain()}
+					>{diagnostics.detecting ? 'detecting…' : 're-detect'}</button
+				>
+			</div>
+
+			<div class="section">
+				<span class="label">engine</span>
+				<div class="seg">
+					{#each ENGINE_CHOICES as choice (choice)}
+						<button
+							class="segbtn"
+							class:on={diagnostics.choice === choice}
+							type="button"
+							onclick={() => void setEngineChoice(choice)}>{choice}</button
+						>
+					{/each}
+				</div>
+				{#if session.engine && session.engine.engine !== resolveEngine()}
+					<span class="muted">change applies on restart</span>
+				{/if}
+				<button class="tbtn" type="button" onclick={restartWithEngine}>restart session</button>
+			</div>
+
+			{#if diagnostics.error}
+				<p class="error">{diagnostics.error}</p>
+			{/if}
+
+			{#if diagnostics.report}
+				<div class="status-line">
+					toolchain: <b>{diagnostics.report.status}</b>
+				</div>
+				<div class="probes">
+					{#each diagnostics.report.probes as p (p.name)}
+						<div class="probe {p.status}">
+							<span class="dot"></span>
+							<div class="probe-text">
+								<div><b>{p.name}</b></div>
+								<div class="muted">{p.detail}</div>
+								{#if p.hint}
+									<button class="hint" type="button" onclick={() => void copyHint(p.hint)}>
+										{p.hint}
+									</button>
+								{/if}
+							</div>
+						</div>
+					{/each}
+				</div>
+			{:else}
+				<p class="muted">no detection yet — press re-detect</p>
+			{/if}
+		</aside>
+	{/if}
 </main>
 
 <style>
@@ -254,6 +354,10 @@ d1 $ s "bd sn:1 ~ hh"
 		height: calc(100vh - 2.7rem);
 	}
 
+	main.with-diag {
+		grid-template-columns: 3fr 2fr 22rem;
+	}
+
 	.editor-pane,
 	.console-pane {
 		min-width: 0;
@@ -308,9 +412,130 @@ d1 $ s "bd sn:1 ~ hh"
 		color: #e5484d;
 	}
 
+	.engine {
+		color: #6f8fd6;
+	}
+
 	.system {
 		color: #e8a33d;
 		font-style: italic;
+	}
+
+	.diag {
+		border-left: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+		padding: 0.55rem 0.75rem;
+		overflow-y: auto;
+		font-size: 0.74rem;
+		line-height: 1.4;
+	}
+
+	.diag-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.5rem;
+		margin-bottom: 0.6rem;
+	}
+
+	.diag .section {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 0.4rem;
+		margin-bottom: 0.7rem;
+	}
+
+	.label {
+		font-size: 0.6rem;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		opacity: 0.6;
+	}
+
+	.seg {
+		display: inline-flex;
+		border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+		border-radius: 6px;
+		overflow: hidden;
+	}
+
+	.segbtn {
+		font: inherit;
+		font-size: 0.7rem;
+		padding: 0.18rem 0.55rem;
+		border: none;
+		background: transparent;
+		color: inherit;
+		cursor: pointer;
+	}
+
+	.segbtn + .segbtn {
+		border-left: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+	}
+
+	.segbtn.on {
+		background: color-mix(in srgb, currentColor 18%, transparent);
+	}
+
+	.status-line {
+		margin: 0 0 0.55rem;
+	}
+
+	.probes {
+		display: flex;
+		flex-direction: column;
+		gap: 0.55rem;
+	}
+
+	.probe {
+		display: flex;
+		align-items: flex-start;
+		gap: 0.45rem;
+	}
+
+	.probe .dot {
+		margin-top: 0.3rem;
+		flex: none;
+	}
+
+	.probe.ok .dot {
+		background: #2ecc71;
+	}
+
+	.probe.warn .dot {
+		background: #f1c40f;
+	}
+
+	.probe.missing .dot {
+		background: #e74c3c;
+	}
+
+	.probe-text {
+		min-width: 0;
+		word-break: break-word;
+	}
+
+	.muted {
+		opacity: 0.65;
+	}
+
+	.hint {
+		display: block;
+		margin-top: 0.15rem;
+		padding: 0;
+		border: none;
+		background: none;
+		color: inherit;
+		font: inherit;
+		font-size: 0.68rem;
+		text-align: left;
+		opacity: 0.8;
+		text-decoration: underline dotted;
+		cursor: pointer;
+	}
+
+	.error {
+		color: #e5484d;
 	}
 
 	@media (prefers-color-scheme: dark) {
