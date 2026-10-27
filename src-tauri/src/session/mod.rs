@@ -918,11 +918,22 @@ mod tests {
                 "{synth} eval reported an error: {out}"
             );
         }
+        for voice in ["d2 $ s \"sn\"", "d3 $ s \"hh\""] {
+            let out = run_eval(&sess, &mut rx, voice).unwrap();
+            assert!(
+                !out.to_lowercase().contains("error"),
+                "{voice} eval reported an error: {out}"
+            );
+        }
         thread::sleep(Duration::from_millis(800));
         let log = drain_events(&mut rx);
         assert!(
             !log.contains("instrument not found") && !log.contains("no synth or sample named"),
             "engine rejected a chip synth:\n{log}"
+        );
+        assert!(
+            !log.contains("falls out of existing orbits"),
+            "boot script must start enough orbits for d1..d16:\n{log}"
         );
 
         run_eval(&sess, &mut rx, "hush").unwrap();

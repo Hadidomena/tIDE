@@ -49,7 +49,7 @@ s.waitForBoot(
 			} {
 				"tIDE: no Dirt-Samples directory configured -- patterns will not sound".postln;
 			};
-			~tideDirt.start(57120, [0]);
+			~tideDirt.start(57120, 0 ! 16);
 			fork {
 				1.wait;
 				writeMarker.value("ready");

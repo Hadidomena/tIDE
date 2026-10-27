@@ -538,6 +538,7 @@ mod tests {
         assert!(script.contains(r#""C:\\Users\\me\\samples""#));
         assert!(script.contains("SuperDirt(2, s)"));
         assert!(script.contains("loadSoundFiles"));
+        assert!(script.contains("start(57120, 0 ! 16)"));
         assert!(script.contains("SynthDef(\\chip"));
         assert!(script.contains("SynthDef(\\chipbass"));
         assert!(script.contains("numInputBusChannels = 0"));
