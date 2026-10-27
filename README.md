@@ -64,7 +64,6 @@ Commits are gated automatically (`lefthook.yml`):
 
 - **pre-commit** — `git diff --check`, `cargo fmt` + `cargo clippy -D warnings` (staged `src-tauri/**`),
   `eslint --fix` + `prettier --write` (staged `src/**`), with auto-staging of fixes
-- **commit-msg** — Conventional Commits (`type(scope)?: subject`, e.g. `feat(editor): send eval command`)
 - **pre-push** — `cargo test` + `npm run check`
 - **post-merge** — `npm install` / `cargo fetch` after pulls
 
