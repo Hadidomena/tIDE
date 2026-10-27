@@ -36,7 +36,6 @@ pre-commit:
       stage_fixed: true
       fail_text: 'prettier could not format staged frontend files'
 
-
 pre-push:
   skip:
     - rebase
