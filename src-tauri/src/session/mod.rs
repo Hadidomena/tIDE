@@ -14,9 +14,6 @@ use tauri::{AppHandle, Emitter, State};
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const EVAL_TIMEOUT: Duration = Duration::from_secs(10);
-/// Engine boot (SuperDirt: sclang + SuperDirt + marker) can be slow on cold starts — a
-/// first-ever sclang launch compiles the whole class library (minutes); the launcher itself
-/// gives up at its own 120 s readiness timeout.
 const ENGINE_TIMEOUT: Duration = Duration::from_secs(150);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -99,8 +96,6 @@ impl Default for Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        // Blocking teardown on drop: tests panic mid-run and the app quits — neither may
-        // leave ghci or a synth server behind. `stop()` is a no-op when already stopped.
         self.stop();
     }
 }
@@ -113,7 +108,6 @@ impl Session {
         let monitor_tx = cmd_tx.clone();
         let worker_evt = evt_tx.clone();
         let worker_state = Arc::clone(&state);
-        // The launcher feeds the same event channel → one forwarder for the whole app.
         let engine = EngineLauncher::new(evt_tx.clone());
         thread::spawn(move || worker_loop(cmd_rx, monitor_tx, worker_evt, worker_state, engine));
         Self {
@@ -154,8 +148,6 @@ impl Session {
     }
 
     pub fn start(&self, engine: Engine, data_dir: PathBuf) -> Result<(), String> {
-        // Report Starting immediately (the command returns this state to the UI before the
-        // worker has run); the worker emits the authoritative State event next.
         *self.state.lock().unwrap() = SessionState::Starting;
         if let Err(e) = self.send(Cmd::Start(engine, data_dir)) {
             *self.state.lock().unwrap() = SessionState::Stopped;
@@ -170,14 +162,17 @@ impl Session {
 
     pub fn restart(&self, engine: Option<Engine>, data_dir: PathBuf) -> Result<(), String> {
         *self.state.lock().unwrap() = SessionState::Starting;
-        self.send(Cmd::Restart(engine, data_dir))
+        if let Err(e) = self.send(Cmd::Restart(engine, data_dir)) {
+            *self.state.lock().unwrap() = SessionState::Stopped;
+            return Err(e);
+        }
+        Ok(())
     }
 
     pub fn stop(&self) {
         if self.cmd_tx.send(Cmd::Stop).is_err() {
             return; // worker gone — nothing to wait for
         }
-        // Covers ghci teardown *and* the blocking engine stop (which alone may take ~10 s).
         let deadline = Instant::now() + Duration::from_secs(15);
         while self.state() != SessionState::Stopped && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(20));
@@ -572,11 +567,14 @@ fn worker_loop(
                         &state,
                         &engine,
                     ),
-                    None => emit_output(
-                        &evt,
-                        "stderr",
-                        "nothing to restart — start the session first".to_string(),
-                    ),
+                    None => {
+                        emit_output(
+                            &evt,
+                            "stderr",
+                            "nothing to restart — start the session first".to_string(),
+                        );
+                        set_state(&state, &evt, SessionState::Stopped);
+                    }
                 }
             }
 
@@ -712,6 +710,16 @@ mod tests {
             }
         }
         log
+    }
+
+    #[test]
+    fn restart_without_prior_start_returns_to_stopped() {
+        let (sess, _rx) = Session::for_test();
+        sess.restart(None, std::env::temp_dir()).unwrap();
+        assert!(
+            wait_for_state(&sess, SessionState::Stopped, 5),
+            "restart with no config must not leave the session in Starting"
+        );
     }
 
     #[test]
