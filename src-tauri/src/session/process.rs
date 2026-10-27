@@ -14,22 +14,28 @@ pub fn prelude_prompts() -> usize {
     PRELUDE.matches('\n').count()
 }
 
-pub fn split_statements(source: &str) -> Vec<String> {
-    let mut statements: Vec<String> = Vec::new();
-    let mut current: Option<String> = None;
+pub struct Statement {
+    pub line: usize,
+    pub text: String,
+}
+
+pub fn split_statements(source: &str) -> Vec<Statement> {
+    let mut statements: Vec<Statement> = Vec::new();
+    let mut current: Option<(usize, String)> = None;
     let mut in_block = false;
 
-    for raw in source.replace("\r\n", "\n").lines() {
+    for (index, raw) in source.replace("\r\n", "\n").lines().enumerate() {
+        let line = index + 1;
         let trimmed = raw.trim();
         if in_block {
-            if let Some(cur) = current.as_mut() {
+            if let Some((_, cur)) = current.as_mut() {
                 cur.push('\n');
                 cur.push_str(raw);
             }
             if trimmed == ":}" {
                 in_block = false;
-                if let Some(cur) = current.take() {
-                    statements.push(cur);
+                if let Some((start, text)) = current.take() {
+                    statements.push(Statement { line: start, text });
                 }
             }
             continue;
@@ -38,47 +44,52 @@ pub fn split_statements(source: &str) -> Vec<String> {
             continue;
         }
         if trimmed.starts_with(":{") {
-            if let Some(cur) = current.take() {
-                statements.push(cur);
+            if let Some((start, text)) = current.take() {
+                statements.push(Statement { line: start, text });
             }
-            current = Some(raw.to_string());
+            current = Some((line, raw.to_string()));
             in_block = true;
             continue;
         }
         let indented = raw.starts_with(' ') || raw.starts_with('\t');
         if indented {
-            if let Some(cur) = current.as_mut() {
+            if let Some((_, cur)) = current.as_mut() {
                 cur.push('\n');
                 cur.push_str(raw);
             } else {
-                current = Some(raw.to_string());
+                current = Some((line, raw.to_string()));
             }
         } else {
-            if let Some(cur) = current.take() {
-                statements.push(cur);
+            if let Some((start, text)) = current.take() {
+                statements.push(Statement { line: start, text });
             }
-            current = Some(raw.to_string());
+            current = Some((line, raw.to_string()));
         }
     }
-    if let Some(cur) = current {
-        statements.push(cur);
+    if let Some((start, text)) = current {
+        statements.push(Statement { line: start, text });
     }
     statements
         .into_iter()
-        .map(|statement| statement.trim_end().to_string())
-        .filter(|statement| !statement.trim().is_empty())
+        .map(|mut statement| {
+            statement.text = statement.text.trim_end().to_string();
+            statement
+        })
+        .filter(|statement| !statement.text.trim().is_empty())
         .collect()
 }
 
-pub fn wrap_code(code: &str) -> String {
+pub fn wrap_code(code: &str, line: Option<usize>) -> String {
     let code = code.trim();
     if code.is_empty() {
         return String::new();
     }
     if code.starts_with(':') {
-        format!("{code}\n")
-    } else {
-        format!(":{{\n{code}\n:}}\n")
+        return format!("{code}\n");
+    }
+    match line {
+        Some(line) => format!(":{{\n{{-# LINE {line} \"tIDE.hs\" #-}}\n{code}\n:}}\n"),
+        None => format!(":{{\n{code}\n:}}\n"),
     }
 }
 
@@ -96,22 +107,30 @@ mod tests {
 
     #[test]
     fn colon_commands_pass_through_unwrapped() {
-        assert_eq!(wrap_code(":reload"), ":reload\n");
-        assert_eq!(wrap_code(" :t map "), ":t map\n");
+        assert_eq!(wrap_code(":reload", None), ":reload\n");
+        assert_eq!(wrap_code(" :t map ", Some(9)), ":t map\n");
     }
 
     #[test]
     fn plain_code_gets_block_framing() {
-        assert_eq!(wrap_code("1+1"), ":{\n1+1\n:}\n");
+        assert_eq!(wrap_code("1+1", None), ":{\n1+1\n:}\n");
         assert_eq!(
-            wrap_code("let x = [1,2\n     ]"),
+            wrap_code("let x = [1,2\n     ]", None),
             ":{\nlet x = [1,2\n     ]\n:}\n"
         );
     }
 
     #[test]
+    fn line_pragma_points_at_editor_line() {
+        assert_eq!(
+            wrap_code("undefinedThing", Some(42)),
+            ":{\n{-# LINE 42 \"tIDE.hs\" #-}\nundefinedThing\n:}\n"
+        );
+    }
+
+    #[test]
     fn empty_code_produces_nothing() {
-        assert_eq!(wrap_code("   \n  "), "");
+        assert_eq!(wrap_code("   \n  ", None), "");
     }
 
     #[test]
@@ -144,16 +163,23 @@ mod tests {
         assert!(!PRELUDE.contains(":{"));
     }
 
+    fn statements(source: &str) -> Vec<(usize, String)> {
+        split_statements(source)
+            .into_iter()
+            .map(|s| (s.line, s.text))
+            .collect()
+    }
+
     #[test]
     fn splits_file_into_statements() {
         let source =
             "-- header\n\nd1 $ s \"bd\"\nd2 $ s \"sn\" -- tail\n\n-- middle\nd3 $ s \"hh\"\n";
         assert_eq!(
-            split_statements(source),
+            statements(source),
             vec![
-                "d1 $ s \"bd\"".to_string(),
-                "d2 $ s \"sn\" -- tail".to_string(),
-                "d3 $ s \"hh\"".to_string()
+                (3, "d1 $ s \"bd\"".to_string()),
+                (4, "d2 $ s \"sn\" -- tail".to_string()),
+                (7, "d3 $ s \"hh\"".to_string())
             ]
         );
     }
@@ -162,10 +188,10 @@ mod tests {
     fn keeps_indented_continuations() {
         let source = "d1 $ s \"bd\"\n   # gain 0.8\n   # pan 0.2\nd2 $ s \"sn\"\n";
         assert_eq!(
-            split_statements(source),
+            statements(source),
             vec![
-                "d1 $ s \"bd\"\n   # gain 0.8\n   # pan 0.2".to_string(),
-                "d2 $ s \"sn\"".to_string()
+                (1, "d1 $ s \"bd\"\n   # gain 0.8\n   # pan 0.2".to_string()),
+                (4, "d2 $ s \"sn\"".to_string())
             ]
         );
     }
@@ -174,10 +200,10 @@ mod tests {
     fn keeps_explicit_blocks_whole() {
         let source = ":{\nlet x = 1\n    y = 2\n:}\nd1 $ s \"bd\"\n";
         assert_eq!(
-            split_statements(source),
+            statements(source),
             vec![
-                ":{\nlet x = 1\n    y = 2\n:}".to_string(),
-                "d1 $ s \"bd\"".to_string()
+                (1, ":{\nlet x = 1\n    y = 2\n:}".to_string()),
+                (5, "d1 $ s \"bd\"".to_string())
             ]
         );
     }
@@ -185,8 +211,11 @@ mod tests {
     #[test]
     fn handles_crlf_and_empty_input() {
         assert_eq!(
-            split_statements("d1 $ s \"bd\"\r\nd2 $ s \"sn\"\r\n"),
-            vec!["d1 $ s \"bd\"".to_string(), "d2 $ s \"sn\"".to_string()]
+            statements("d1 $ s \"bd\"\r\nd2 $ s \"sn\"\r\n"),
+            vec![
+                (1, "d1 $ s \"bd\"".to_string()),
+                (2, "d2 $ s \"sn\"".to_string())
+            ]
         );
         assert!(split_statements("").is_empty());
         assert!(split_statements("\n-- only comments\n").is_empty());

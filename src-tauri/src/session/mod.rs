@@ -1,7 +1,9 @@
 pub mod process;
 
 use crate::engine::{Engine, EngineLauncher, EngineState};
-use process::{PRELUDE, PROMPT_SETUP, is_ready, prelude_prompts, split_statements, wrap_code};
+use process::{
+    PRELUDE, PROMPT_SETUP, Statement, is_ready, prelude_prompts, split_statements, wrap_code,
+};
 use serde::Serialize;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -61,7 +63,7 @@ enum Cmd {
     Start(Engine, PathBuf),
     Restart(Option<Engine>, PathBuf),
     Stop,
-    Eval(String),
+    Eval(String, Option<usize>),
     Death { id: u32, reason: String },
 }
 
@@ -156,13 +158,13 @@ impl Session {
         Ok(())
     }
 
-    pub fn eval(&self, code: String) -> Result<(), String> {
-        self.send(Cmd::Eval(code))
+    pub fn eval(&self, code: String, line: Option<usize>) -> Result<(), String> {
+        self.send(Cmd::Eval(code, line))
     }
 
-    pub fn eval_many(&self, statements: Vec<String>) -> Result<usize, String> {
+    pub fn eval_many(&self, statements: Vec<Statement>) -> Result<usize, String> {
         for statement in &statements {
-            self.send(Cmd::Eval(statement.clone()))?;
+            self.send(Cmd::Eval(statement.text.clone(), Some(statement.line)))?;
         }
         Ok(statements.len())
     }
@@ -231,7 +233,11 @@ pub fn session_start(
 }
 
 #[tauri::command]
-pub fn session_eval(code: String, session: State<'_, Session>) -> Result<SessionState, String> {
+pub fn session_eval(
+    code: String,
+    line: Option<usize>,
+    session: State<'_, Session>,
+) -> Result<SessionState, String> {
     let code = code.trim().to_string();
     if code.is_empty() {
         return Err("nothing to evaluate".to_string());
@@ -239,7 +245,7 @@ pub fn session_eval(code: String, session: State<'_, Session>) -> Result<Session
     if session.state() != SessionState::Ready {
         return Err(format!("session not ready (state: {:?})", session.state()));
     }
-    session.eval(code)?;
+    session.eval(code, line)?;
     Ok(session.state())
 }
 
@@ -629,8 +635,8 @@ fn worker_loop(
                 }
             }
 
-            Cmd::Eval(code) => {
-                let frame = wrap_code(&code);
+            Cmd::Eval(code, line) => {
+                let frame = wrap_code(&code, line);
                 if frame.is_empty() {
                     continue;
                 }
@@ -706,7 +712,16 @@ mod tests {
         rx: &mut Receiver<SessionEvent>,
         code: &str,
     ) -> Result<String, String> {
-        sess.eval(code.to_string())?;
+        run_eval_at(sess, rx, code, None)
+    }
+
+    fn run_eval_at(
+        sess: &Session,
+        rx: &mut Receiver<SessionEvent>,
+        code: &str,
+        line: Option<usize>,
+    ) -> Result<String, String> {
+        sess.eval(code.to_string(), line)?;
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {
             let ev = rx
@@ -880,6 +895,12 @@ mod tests {
                 "expected {name} from Sound.Tidal.Boot ({kind}), got: {out}"
             );
         }
+
+        let out = run_eval_at(&sess, &mut rx, "undefinedThing 1", Some(7)).unwrap();
+        assert!(
+            out.contains("tIDE.hs:7:"),
+            "error must point at the editor line 7, got: {out}"
+        );
 
         sess.stop();
         assert!(wait_for_state(&sess, SessionState::Stopped, 15));

@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { EditorState, Prec } from '@codemirror/state';
-	import { EditorView, keymap } from '@codemirror/view';
+	import { EditorState, Prec, StateEffect, StateField } from '@codemirror/state';
+	import { Decoration, type DecorationSet, EditorView, keymap } from '@codemirror/view';
 	import { LanguageSupport } from '@codemirror/language';
 	import { acceptCompletion, autocompletion, completeAnyWord } from '@codemirror/autocomplete';
 	import { indentLess, indentMore } from '@codemirror/commands';
@@ -11,13 +11,15 @@
 
 	interface Props {
 		content?: string;
-		onEval?: (code: string) => void;
+		errorLine?: number | null;
+		onEval?: (code: string, line: number) => void;
 		onRunAll?: (code: string) => void;
 		onHush?: () => void;
 	}
 
 	let {
 		content = $bindable(''),
+		errorLine = null,
 		onEval = () => {},
 		onRunAll = () => {},
 		onHush = () => {}
@@ -36,17 +38,36 @@
 		)
 	]);
 
-	function lineOrSelection(v: EditorView): string {
+	function lineOrSelection(v: EditorView): { code: string; line: number } {
 		const { from, to } = v.state.selection.main;
-		if (from !== to) return v.state.sliceDoc(from, to);
-		return v.state.doc.lineAt(from).text;
+		const line = v.state.doc.lineAt(from).number;
+		if (from !== to) return { code: v.state.sliceDoc(from, to), line };
+		return { code: v.state.doc.lineAt(from).text, line };
 	}
 
 	function evalLineOrSelection(v: EditorView): boolean {
-		const code = lineOrSelection(v).trim();
-		if (code) onEval(code);
+		const { code, line } = lineOrSelection(v);
+		if (code.trim()) onEval(code, line);
 		return true;
 	}
+
+	const setErrorLine = StateEffect.define<number | null>();
+
+	const errorLineField = StateField.define<DecorationSet>({
+		create: () => Decoration.none,
+		update(decorations, tr) {
+			let next = decorations.map(tr.changes);
+			for (const effect of tr.effects) {
+				if (!effect.is(setErrorLine)) continue;
+				if (effect.value == null) return Decoration.none;
+				const number = Math.min(Math.max(effect.value, 1), tr.state.doc.lines);
+				const line = tr.state.doc.line(number);
+				next = Decoration.set([Decoration.line({ class: 'cm-error-line' }).range(line.from)]);
+			}
+			return next;
+		},
+		provide: (field) => EditorView.decorations.from(field)
+	});
 
 	$effect(() => {
 		if (!host) return;
@@ -57,6 +78,7 @@
 				extensions: [
 					basicSetup,
 					tidalSupport,
+					errorLineField,
 					Prec.high(
 						keymap.of([
 							{
@@ -101,6 +123,11 @@
 
 	$effect(() => {
 		if (!view) return;
+		view.dispatch({ effects: setErrorLine.of(errorLine ?? null) });
+	});
+
+	$effect(() => {
+		if (!view) return;
 		const current = view.state.doc.toString();
 		if (content !== current) {
 			view.dispatch({ changes: { from: 0, to: current.length, insert: content } });
@@ -123,6 +150,16 @@
 
 	:global(.editor-host .cm-scroller) {
 		font-family: 'JetBrains Mono', Menlo, Monaco, Consolas, monospace;
+	}
+
+	:global(.editor-host .cm-error-line) {
+		background: color-mix(in srgb, #d12631 14%, transparent);
+	}
+
+	@media (prefers-color-scheme: dark) {
+		:global(.editor-host .cm-error-line) {
+			background: color-mix(in srgb, #ff6369 20%, transparent);
+		}
 	}
 
 	:global(.cm-tooltip.cm-tooltip-autocomplete) {

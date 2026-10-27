@@ -103,8 +103,8 @@ d1 $ s "bd sn:1 ~ hh"
 		}
 	});
 
-	function handleEval(code: string) {
-		void session.eval(code);
+	function handleEval(code: string, line: number) {
+		void session.eval(code, line);
 	}
 
 	function handleHush() {
@@ -190,7 +190,13 @@ d1 $ s "bd sn:1 ~ hh"
 
 <main class:with-diag={diagnostics.open}>
 	<section class="editor-pane" aria-label="code editor">
-		<Editor bind:content={buffer} onEval={handleEval} onRunAll={handleRunAll} onHush={handleHush} />
+		<Editor
+			bind:content={buffer}
+			errorLine={session.errorLine}
+			onEval={handleEval}
+			onRunAll={handleRunAll}
+			onHush={handleHush}
+		/>
 	</section>
 	<section class="console-pane" aria-label="console">
 		<pre

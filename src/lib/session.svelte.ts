@@ -25,10 +25,12 @@ const MAX_CHUNKS = 2000;
 class SessionModel {
 	state = $state<SessionState>('stopped');
 	engine = $state<EngineStatus | null>(null);
+	errorLine = $state<number | null>(null);
 	chunks = $state<Chunk[]>([]);
 	private connected = false;
 	private unlisten: UnlistenFn | undefined;
 	private seq = 0;
+	private outputTail = '';
 
 	async connect(engine: string | null = null) {
 		if (this.connected) return;
@@ -51,6 +53,7 @@ class SessionModel {
 			return;
 		}
 		this.push(ev.stream, ev.text);
+		this.detectErrorLine(ev.text);
 		if (
 			ev.stream === 'stderr' &&
 			/failed to spawn ghci|cannot satisfy -package tidal/.test(ev.text)
@@ -60,6 +63,13 @@ class SessionModel {
 				'hint: Tidal missing — see README prerequisites (cabal install --lib tidal)\n'
 			);
 		}
+	}
+
+	private detectErrorLine(text: string) {
+		const combined = this.outputTail + text;
+		this.outputTail = combined.slice(-256);
+		const match = /tIDE\.hs:(\d+):\d+/.exec(combined);
+		if (match) this.errorLine = Number(match[1]);
 	}
 
 	private push(stream: Chunk['stream'], text: string) {
@@ -82,15 +92,17 @@ class SessionModel {
 		await this.eval('hush');
 	}
 
-	async eval(code: string) {
+	async eval(code: string, line?: number) {
+		this.errorLine = null;
 		try {
-			await invoke('session_eval', { code });
+			await invoke('session_eval', { code, line: line ?? null });
 		} catch (e) {
 			this.push('system', `eval rejected: ${String(e)}\n`);
 		}
 	}
 
 	async runFile(code: string) {
+		this.errorLine = null;
 		try {
 			const count = await invoke<number>('session_eval_file', { code });
 			this.notify(`running ${count} statement${count === 1 ? '' : 's'} from the file`);
