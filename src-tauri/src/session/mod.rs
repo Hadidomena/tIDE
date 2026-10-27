@@ -205,8 +205,6 @@ pub fn session_start(
         session.state(),
         SessionState::Stopped | SessionState::Failed
     ) {
-        // The frontend resolves "auto" via the detector (step 4) and passes a concrete kind;
-        // Rust stays DB-free by design.
         let engine = match engine.as_deref() {
             None | Some("superdirt") => Engine::SuperDirt,
             Some("headless") => Engine::Headless,
@@ -342,9 +340,6 @@ fn kill(active: &mut Option<Active>) {
     }
 }
 
-/// SIGTERM ghci processes left behind by a killed app (they hold Tidal's control port
-/// 6010). Only orphans (ppid 1) with our exact spawn args are touched — a ghci the user
-/// runs from a terminal has a live parent and is left alone.
 #[cfg(unix)]
 fn reap_orphaned_ghci() {
     let Ok(output) = Command::new("pgrep")
@@ -471,7 +466,6 @@ fn do_start(
     evt: &Events,
     id: u32,
 ) -> Result<Active, String> {
-    // Engine first: the session reaches Ready only once audio actually runs.
     launcher
         .start(engine, data_dir.to_path_buf(), None)
         .map_err(|e| format!("engine start failed: {e}"))?;
@@ -500,7 +494,6 @@ fn do_start(
         }
     }
 
-    // Tidal prelude — separate statements, one prompt echo each (step-0 verified shape).
     write_all(&mut a.stdin, PRELUDE)?;
     let mut acc = String::new();
     match pump(&mut a, evt, &mut acc, STARTUP_TIMEOUT, prelude_prompts()) {
@@ -793,8 +786,6 @@ mod tests {
         drop(sess);
     }
 
-    /// M2 step 3 exit criterion: the headless engine still boots the Tidal prelude —
-    /// `d1..d8` and `hush` are bound without any SuperCollider on the machine. CI-safe.
     #[test]
     #[ignore = "requires working ghci + tidal (headless prelude, no audio device needed)"]
     fn headless_session_prelude() {
@@ -822,8 +813,6 @@ mod tests {
         assert!(wait_for_state(&sess, SessionState::Stopped, 15));
     }
 
-    /// Full stack on a real machine: SuperDirt engine + ghci session + prelude, then a
-    /// pattern eval and hush. Sound itself needs ears; this proves the pipeline is error-free.
     #[test]
     #[ignore = "requires SuperCollider + ghci/tidal — full engine+session smoke (~20 s)"]
     fn superdirt_session_smoke() {
@@ -837,9 +826,6 @@ mod tests {
             drain_events(&mut rx)
         );
 
-        // Owner manual test (2026-10-25): SuperDirt.start does not load samples — the boot
-        // script must call loadSoundFiles with the detected Dirt-Samples dir, or every
-        // `s "bd"` fails with "no synth or sample named 'bd'".
         let boot_log = drain_events(&mut rx);
         assert!(
             boot_log.contains("tIDE: loading samples from") && boot_log.contains("Dirt-Samples"),
@@ -850,6 +836,21 @@ mod tests {
         assert!(
             !out.to_lowercase().contains("error"),
             "pattern eval reported an error: {out}"
+        );
+
+        for synth in ["chip", "chipbass", "chipled", "chipnoise"] {
+            let code = format!("d1 $ s \"{synth}\" # note \"c3\"");
+            let out = run_eval(&sess, &mut rx, &code).unwrap();
+            assert!(
+                !out.to_lowercase().contains("error"),
+                "{synth} eval reported an error: {out}"
+            );
+        }
+        thread::sleep(Duration::from_millis(800));
+        let log = drain_events(&mut rx);
+        assert!(
+            !log.contains("instrument not found") && !log.contains("no synth or sample named"),
+            "engine rejected a chip synth:\n{log}"
         );
 
         run_eval(&sess, &mut rx, "hush").unwrap();

@@ -1,16 +1,3 @@
-// tIDE — SuperDirt boot script (template; __TIDE_MARKER__ is substituted at launch).
-//
-//! The readiness marker file is written explicitly (File write + close) because sclang's
-//! exit path is not guaranteed to flush buffered stdout — the M2 step-0 spike lost every
-//! marker printed after the early ones. Rust watches the marker plus the OSC port:
-//! a bound port alone proved unreliable there too (57120 was up while SuperDirt.new threw).
-//
-// __TIDE_SAMPLES__ is the Dirt-Samples root (owner manual test, step 3): SuperDirt's
-// `start` does NOT load samples — without `loadSoundFiles` every `s "bd"` fails with
-// "instrument not found".
-//
-// NOTE: prettier must never format this file (.prettierignore → *.scd): its fallback
-// parser for unknown extensions is markdown, which mangles this code.
 (
 var marker = "__TIDE_MARKER__";
 var samples = "__TIDE_SAMPLES__";
@@ -19,14 +6,31 @@ var writeMarker = { |text|
 	f.write(text ++ "\n");
 	f.close;
 };
-// SuperDirt needs no audio input, and an input device whose sample rate differs from the
-// output (common with Bluetooth/USB mics: 16 kHz in, 44.1 kHz out) makes scsynth refuse
-// to boot. Disabling input buses makes startup deterministic on every device setup.
+
+var chipSynths = {
+	SynthDef(\chip, { |out, freq = 440, sustain = 1, gain = 1, pan = 0, pw = 0.5|
+		var env = EnvGen.kr(Env.linen(0.002, sustain.max(0.01), 0.02), doneAction: 2);
+		var sig = Pulse.ar(freq, pw.clip(0.05, 0.95)) * env * gain;
+		Out.ar(out, Pan2.ar(sig, pan));
+	}).add;
+	SynthDef(\chipbass, { |out, freq = 220, sustain = 1, gain = 1, pan = 0|
+		var env = EnvGen.kr(Env.linen(0.002, sustain.max(0.01), 0.02), doneAction: 2);
+		var sig = (LFTri.ar(freq) * 0.8) + (Pulse.ar(freq, 0.5) * 0.15);
+		Out.ar(out, Pan2.ar(sig * env * gain, pan));
+	}).add;
+	SynthDef(\chipled, { |out, freq = 880, sustain = 0.5, gain = 1, pan = 0, pw = 0.125|
+		var env = EnvGen.kr(Env.perc(0.001, sustain.max(0.01)), doneAction: 2);
+		var sig = Pulse.ar(freq, pw.clip(0.05, 0.95)) * env * gain;
+		Out.ar(out, Pan2.ar(sig, pan));
+	}).add;
+	SynthDef(\chipnoise, { |out, freq = 1000, sustain = 0.25, gain = 1, pan = 0|
+		var env = EnvGen.kr(Env.perc(0.001, sustain.max(0.01)), doneAction: 2);
+		var sig = BPF.ar(WhiteNoise.ar, freq.clip(80, 12000), 0.4) * 2 * env * gain;
+		Out.ar(out, Pan2.ar(sig, pan));
+	}).add;
+	s.sync;
+};
 s.options.numInputBusChannels = 0;
-// Canonical SuperDirt server sizing: the default 1024 buffers cannot hold the whole
-// Dirt-Samples pack (~thousands of files) — without these, every sample past the limit
-// fails with "No more buffer numbers" and prints a stack trace (a 100k-line flood that
-// locks up the UI).
 s.options.numBuffers = 1024 * 256;
 s.options.memSize = 8192 * 32;
 s.options.maxNodes = 1024 * 32;
@@ -35,6 +39,7 @@ s.waitForBoot(
 	{
 		"tIDE: server booted -- starting SuperDirt".postln;
 		{
+			chipSynths.value;
 			~tideDirt = SuperDirt(2, s);
 			if (samples.size > 0) {
 				"tIDE: loading samples from ".postln;
@@ -45,8 +50,6 @@ s.waitForBoot(
 			};
 			~tideDirt.start(57120, [0]);
 			fork {
-				// Let the dirt responders settle before declaring readiness (samples keep
-				// loading in the background; the first eval may briefly miss a group).
 				1.wait;
 				writeMarker.value("ready");
 				"tIDE: engine ready".postln;
@@ -59,7 +62,6 @@ s.waitForBoot(
 			"tIDE: engine failed".postln;
 			err.errorString.postln;
 		});
-		// Watchdog: scsynth exiting later leaves sclang alive and lying otherwise.
 		fork {
 			loop {
 				2.wait;

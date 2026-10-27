@@ -66,8 +66,6 @@ pub struct EngineLauncher {
 }
 
 impl EngineLauncher {
-    /// `sink` is the session's event channel (M2 step 3): engine frames ride the same
-    /// `session://event` stream, so the app needs exactly one forwarder.
     pub fn new(sink: Sender<SessionEvent>) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let status: Arc<Mutex<EngineStatus>> = Arc::new(Mutex::new(EngineStatus::default()));
@@ -92,9 +90,6 @@ impl EngineLauncher {
         data_dir: PathBuf,
         sclang_override: Option<String>,
     ) -> Result<(), String> {
-        // Mark Starting *before* dispatching: the session boot polls `status()` right after
-        // start(), and the previous state is `Down` — without this it would read a stale
-        // "engine unavailable" before the worker even picked up the command.
         set_status(
             &self.status,
             Some(engine),
@@ -108,8 +103,6 @@ impl EngineLauncher {
 
     pub fn stop(&self) {
         if self.status().state == EngineState::Down {
-            // Nothing running: queueing a Stop here would land *after* a following start()
-            // and flip the freshly-set Starting back to Down (observed race in step 3).
             return;
         }
         let _ = self.cmd_tx.send(Cmd::Stop);
@@ -256,10 +249,6 @@ fn start_superdirt(
     }
 
     if port_held(OSC_PORT) {
-        // sclang always binds 57120 as its language port, so a busy port means another
-        // SuperCollider/sclang is running. If it is *our own* stale engine (script path
-        // matches this data dir — e.g. an app killed with Ctrl+C, which skips the Exit
-        // hook), reap its process group and retry. Anything else fails with a clear hint.
         let reaped = reap_stale_engines(&script);
         if reaped > 0 {
             emit_output(
@@ -407,10 +396,6 @@ fn drain(run: &Running, evt: &Sender<SessionEvent>) {
     drain_output(&run.lines, evt);
 }
 
-/// Emit queued sclang output as **few, bounded** events. Per-chunk events at the rate a
-/// failing sample load produces (a stack trace per file) lock up the webview — batching
-/// keeps the console responsive while still streaming promptly (the worker loops every
-/// 200 ms and flushes whatever it has).
 fn drain_output(lines: &Receiver<String>, evt: &Sender<SessionEvent>) {
     const BATCH: usize = 32 * 1024;
     let mut batch = String::new();
@@ -479,9 +464,6 @@ fn kill_group(child: &Arc<Mutex<Child>>) {
     let _ = guard.wait();
 }
 
-/// SIGTERM every process whose command line contains our boot-script path (i.e. a sclang
-/// from a previous tIDE run — the path is unique to this app-data dir), then their process
-/// groups. Returns how many were signalled. Used only when 57120 is already taken.
 #[cfg(unix)]
 fn reap_stale_engines(script: &Path) -> usize {
     let Ok(output) = Command::new("pgrep")
@@ -493,7 +475,6 @@ fn reap_stale_engines(script: &Path) -> usize {
     let mut signalled = 0;
     for line in String::from_utf8_lossy(&output.stdout).lines() {
         if let Ok(pid) = line.trim().parse::<i32>() {
-            // process_group(0) made pid the pgid → this reaps the scsynth grandchild too.
             let _ = unsafe { libc::kill(-pid, libc::SIGTERM) };
             let _ = unsafe { libc::kill(pid, libc::SIGTERM) };
             signalled += 1;
@@ -557,6 +538,8 @@ mod tests {
         assert!(script.contains(r#""C:\\Users\\me\\samples""#));
         assert!(script.contains("SuperDirt(2, s)"));
         assert!(script.contains("loadSoundFiles"));
+        assert!(script.contains("SynthDef(\\chip"));
+        assert!(script.contains("SynthDef(\\chipbass"));
         assert!(script.contains("numInputBusChannels = 0"));
         assert!(script.contains("numBuffers = 1024 * 256"));
         assert!(script.contains("maxNodes = 1024 * 32"));
