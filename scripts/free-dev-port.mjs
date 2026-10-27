@@ -29,9 +29,13 @@ function listeningPids() {
 	].filter(Boolean);
 }
 
+function commandOf(pid) {
+	if (isWindows) return '';
+	return run('ps', ['-ww', '-p', pid, '-o', 'command=']);
+}
+
 function isOurVite(pid) {
-	if (isWindows) return false;
-	const command = run('ps', ['-ww', '-p', pid, '-o', 'command=']);
+	const command = commandOf(pid);
 	return command.includes(ROOT) && command.includes('vite');
 }
 
@@ -42,9 +46,13 @@ const stale = pids.filter(isOurVite);
 const foreign = pids.filter((pid) => !stale.includes(pid));
 
 if (foreign.length > 0) {
-	console.error(
-		`[dev] port ${PORT} is held by another process (pid ${foreign.join(', ')}); stop it and retry.`
-	);
+	const detail = foreign
+		.map((pid) => {
+			const command = commandOf(pid);
+			return command ? `pid ${pid}: ${command.slice(0, 120)}` : `pid ${pid}`;
+		})
+		.join('; ');
+	console.error(`[dev] port ${PORT} is held by another process (${detail}); stop it and retry.`);
 	process.exit(1);
 }
 
