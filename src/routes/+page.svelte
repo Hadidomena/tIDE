@@ -34,6 +34,7 @@ d1 $ s "bd sn:1 ~ hh"
 	let consoleEl: HTMLPreElement | undefined = $state();
 	let stickToBottom = true;
 	let lineIn = $state('');
+	let showLogs = $state(false);
 	let lastSaved = $state('');
 	const dirty = $derived(buffer !== lastSaved);
 
@@ -188,6 +189,12 @@ d1 $ s "bd sn:1 ~ hh"
 		<button
 			class="tbtn"
 			type="button"
+			onclick={() => (showLogs = !showLogs)}
+			aria-pressed={showLogs}>{showLogs ? 'hide logs' : 'logs'}</button
+		>
+		<button
+			class="tbtn"
+			type="button"
 			onclick={() => (diagnostics.open = !diagnostics.open)}
 			aria-pressed={diagnostics.open}>{diagnostics.open ? 'hide diag' : 'diagnostics'}</button
 		>
@@ -205,7 +212,7 @@ d1 $ s "bd sn:1 ~ hh"
 	<button class="restart" type="button" onclick={restartWithEngine}>restart</button>
 </header>
 
-<main class:with-diag={diagnostics.open}>
+<main class:with-logs={showLogs} class:with-diag={diagnostics.open}>
 	<section class="editor-pane" aria-label="code editor">
 		<Editor
 			bind:content={buffer}
@@ -215,22 +222,24 @@ d1 $ s "bd sn:1 ~ hh"
 			onHush={handleHush}
 		/>
 	</section>
-	<section class="console-pane" aria-label="console">
-		<pre
-			bind:this={consoleEl}
-			onscroll={onScroll}
-			role="log">{#each session.chunks as c (c.id)}<span class={c.stream}>{c.text}</span
-				>{/each}</pre>
-		<div class="console-row">
-			<span class="prompt">›</span>
-			<input
-				bind:value={lineIn}
-				onkeydown={onConsoleKey}
-				placeholder="type Haskell or :commands, Enter evaluates"
-				aria-label="console input"
-			/>
-		</div>
-	</section>
+	{#if showLogs}
+		<section class="console-pane" aria-label="console">
+			<pre
+				bind:this={consoleEl}
+				onscroll={onScroll}
+				role="log">{#each session.chunks as c (c.id)}<span class={c.stream}>{c.text}</span
+					>{/each}</pre>
+			<div class="console-row">
+				<span class="prompt">›</span>
+				<input
+					bind:value={lineIn}
+					onkeydown={onConsoleKey}
+					placeholder="type Haskell or :commands, Enter evaluates"
+					aria-label="console input"
+				/>
+			</div>
+		</section>
+	{/if}
 	{#if diagnostics.open}
 		<aside class="diag" aria-label="diagnostics">
 			<div class="diag-head">
@@ -447,12 +456,20 @@ d1 $ s "bd sn:1 ~ hh"
 
 	main {
 		display: grid;
-		grid-template-columns: 3fr 2fr;
+		grid-template-columns: 1fr;
 		height: calc(100vh - 2.7rem);
 	}
 
-	main.with-diag {
+	main.with-logs {
+		grid-template-columns: 3fr 2fr;
+	}
+
+	main.with-logs.with-diag {
 		grid-template-columns: 3fr 2fr 22rem;
+	}
+
+	main.with-diag:not(.with-logs) {
+		grid-template-columns: 1fr 22rem;
 	}
 
 	.editor-pane,
