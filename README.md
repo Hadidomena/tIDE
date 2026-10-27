@@ -46,9 +46,12 @@ npm install
 npm run tauri dev         # opens the app window (use the native window)
 ```
 
-In the window: `Cmd/Ctrl+Enter` evaluates the current line or selection, `Cmd/Ctrl+.` (or the
-hush button) silences all patterns. The engine is selected in Diagnostics: `auto` (SuperDirt when
-detected, otherwise headless), or explicitly `superdirt` / `headless`.
+In the window: `Cmd/Ctrl+Enter` evaluates the current line or selection, `Cmd/Ctrl+Shift+Enter`
+(or the **run file** button) replays the whole file statement by statement, `Cmd/Ctrl+.` (or the
+hush button) silences all patterns. To reproduce a file's state exactly, hit **restart** first
+(fresh prelude, no leftover bindings) and then run the file. The engine is selected in
+Diagnostics: `auto` (SuperDirt when detected, otherwise headless), or explicitly
+`superdirt` / `headless`.
 
 Built-in additional instruments (no samples needed): `chip`, `chipbass`, `chipled`, `chipnoise` —
 for example `d1 $ s "chipbass" # note "c2 eb2 g2 bb2" # legato 0.8`.
