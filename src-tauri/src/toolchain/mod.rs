@@ -181,7 +181,11 @@ const HINT_SAMPLES: &str = "Installing the SuperDirt quark should download Dirt-
                            the Quark installer or clone https://codeberg.org/musikinformatik/SuperDirt";
 
 fn ghc_dirs(home: &Path) -> Vec<PathBuf> {
-    vec![home.join(".ghcup").join("bin")]
+    vec![
+        home.join(".ghcup").join("bin"),
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/usr/local/bin"),
+    ]
 }
 
 fn sclang_dirs(home: &Path) -> Vec<PathBuf> {
@@ -224,6 +228,14 @@ fn quark_root(home: &Path) -> PathBuf {
 pub fn find_sclang(override_path: Option<&str>) -> Option<PathBuf> {
     let home = home_dir();
     locate(override_path, "sclang", &sclang_dirs(&home))
+}
+
+/// ghci discovery for the session supervisor. A GUI-launched app (Finder/installer build)
+/// gets only `/usr/bin:/bin:…` as PATH, so the shell's ghcup shim is invisible — the
+/// explicit `~/.ghcup/bin` fallback is what makes the packaged app work at all.
+pub fn find_ghci() -> Option<PathBuf> {
+    let home = home_dir();
+    locate(None, "ghci", &ghc_dirs(&home))
 }
 
 /// Dirt-Samples root (one directory per sample group). The engine boot script feeds this to

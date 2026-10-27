@@ -34,6 +34,7 @@ s.options.numInputBusChannels = 0;
 s.options.numBuffers = 1024 * 256;
 s.options.memSize = 8192 * 32;
 s.options.maxNodes = 1024 * 32;
+s.options.numWireBufs = 128;
 "tIDE: booting SuperCollider server...".postln;
 s.waitForBoot(
 	{

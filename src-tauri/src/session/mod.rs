@@ -373,7 +373,8 @@ fn reap_orphaned_ghci() {}
 
 fn launch(monitor_tx: &Sender<Cmd>, id: u32) -> Result<Active, String> {
     reap_orphaned_ghci();
-    let spawned = Command::new("ghci")
+    let ghci = crate::toolchain::find_ghci().unwrap_or_else(|| std::path::PathBuf::from("ghci"));
+    let spawned = Command::new(&ghci)
         .args(["-ignore-dot-ghci", "-package", "tidal"])
         .env("TERM", "dumb")
         .stdin(Stdio::piped())
@@ -381,7 +382,10 @@ fn launch(monitor_tx: &Sender<Cmd>, id: u32) -> Result<Active, String> {
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| {
-            format!("failed to spawn ghci: {e} — is Tidal installed? (see README prerequisites)")
+            format!(
+                "failed to spawn {}: {e} — is Tidal installed? (see README prerequisites)",
+                ghci.display()
+            )
         })?;
 
     let child = Arc::new(Mutex::new(spawned));
