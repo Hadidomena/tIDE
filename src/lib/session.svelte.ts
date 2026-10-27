@@ -90,6 +90,15 @@ class SessionModel {
 		}
 	}
 
+	async runFile(code: string) {
+		try {
+			const count = await invoke<number>('session_eval_file', { code });
+			this.notify(`running ${count} statement${count === 1 ? '' : 's'} from the file`);
+		} catch (e) {
+			this.push('system', `run file failed: ${String(e)}\n`);
+		}
+	}
+
 	echo(code: string) {
 		this.push('system', `> ${code}\n`);
 	}

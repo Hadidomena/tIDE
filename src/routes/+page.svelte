@@ -22,6 +22,7 @@
 
 	let buffer = $state(`-- tIDE — live GHCi session with SuperDirt (M2)
 -- Cmd/Ctrl+Enter evaluates the current line or selection.
+-- Cmd/Ctrl+Shift+Enter runs the whole file.
 -- Cmd/Ctrl+. (or the hush button) silences every running pattern.
 
 d1 $ s "bd sn:1 ~ hh"
@@ -110,6 +111,10 @@ d1 $ s "bd sn:1 ~ hh"
 		void session.hush();
 	}
 
+	function handleRunAll(code: string) {
+		void session.runFile(code);
+	}
+
 	async function copyHint(text: string) {
 		try {
 			await navigator.clipboard.writeText(text);
@@ -152,6 +157,13 @@ d1 $ s "bd sn:1 ~ hh"
 		<button
 			class="tbtn"
 			type="button"
+			title="run the whole file (Cmd/Ctrl+Shift+Enter)"
+			disabled={session.state !== 'ready'}
+			onclick={() => handleRunAll(buffer)}>run file</button
+		>
+		<button
+			class="tbtn"
+			type="button"
 			title="silence all patterns (Cmd/Ctrl+.)"
 			disabled={session.state !== 'ready'}
 			onclick={handleHush}>hush</button
@@ -173,14 +185,12 @@ d1 $ s "bd sn:1 ~ hh"
 			engine: {session.engine.engine} · {session.engine.status}
 		</span>
 	{/if}
-	{#if session.state === 'failed' || session.state === 'stopped'}
-		<button class="restart" type="button" onclick={restartWithEngine}>restart</button>
-	{/if}
+	<button class="restart" type="button" onclick={restartWithEngine}>restart</button>
 </header>
 
 <main class:with-diag={diagnostics.open}>
 	<section class="editor-pane" aria-label="code editor">
-		<Editor bind:content={buffer} onEval={handleEval} onHush={handleHush} />
+		<Editor bind:content={buffer} onEval={handleEval} onRunAll={handleRunAll} onHush={handleHush} />
 	</section>
 	<section class="console-pane" aria-label="console">
 		<pre
