@@ -22,7 +22,11 @@ export const diagnostics = $state({
 	report: null as DetectReport | null,
 	cachedStatus: null as ToolchainStatus | null,
 	detecting: false,
-	error: ''
+	error: '',
+	devices: [] as string[],
+	devicesLoading: false,
+	inputDevice: '',
+	outputDevice: ''
 });
 
 export async function initDiagnostics() {
@@ -35,6 +39,8 @@ export async function initDiagnostics() {
 		if (cached === 'superDirtReady' || cached === 'headlessOnly' || cached === 'broken') {
 			diagnostics.cachedStatus = cached;
 		}
+		diagnostics.inputDevice = (await getSetting('audio_in_device')) ?? '';
+		diagnostics.outputDevice = (await getSetting('audio_out_device')) ?? '';
 	} catch (e) {
 		diagnostics.error = String(e);
 	}
@@ -63,6 +69,37 @@ async function overridesJson(): Promise<string | null> {
 	]);
 	if (!ghc && !sclang) return null;
 	return JSON.stringify({ ghcPath: ghc ?? undefined, sclangPath: sclang ?? undefined });
+}
+
+export async function loadDevices() {
+	if (diagnostics.devicesLoading) return;
+	diagnostics.devicesLoading = true;
+	diagnostics.error = '';
+	try {
+		diagnostics.devices = await invoke<string[]>('audio_devices');
+	} catch (e) {
+		diagnostics.error = String(e);
+	} finally {
+		diagnostics.devicesLoading = false;
+	}
+}
+
+export async function setInputDevice(name: string) {
+	diagnostics.inputDevice = name;
+	try {
+		await setSetting('audio_in_device', name);
+	} catch (e) {
+		diagnostics.error = String(e);
+	}
+}
+
+export async function setOutputDevice(name: string) {
+	diagnostics.outputDevice = name;
+	try {
+		await setSetting('audio_out_device', name);
+	} catch (e) {
+		diagnostics.error = String(e);
+	}
 }
 
 export async function detectToolchain() {

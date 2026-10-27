@@ -238,6 +238,38 @@ pub fn find_ghci() -> Option<PathBuf> {
     locate(None, "ghci", &ghc_dirs(&home))
 }
 
+/// Device names as SuperCollider reports them (input and output devices share one list;
+/// `ServerOptions.inDevice`/`outDevice` take these exact strings).
+pub fn list_audio_devices() -> Result<Vec<String>, String> {
+    let sclang = find_sclang(None).ok_or("sclang not found — install SuperCollider")?;
+    let script = std::env::temp_dir().join(format!("tide-devices-{}.scd", std::process::id()));
+    std::fs::write(
+        &script,
+        "ServerOptions.devices.do { |d| (\"TIDE-DEVICE \" ++ d).postln }; 0.exit;\n",
+    )
+    .map_err(|e| format!("cannot write device probe: {e}"))?;
+    let script_arg = script.to_string_lossy().to_string();
+    let outcome = run(&sclang, &[&script_arg], Duration::from_secs(30));
+    let _ = std::fs::remove_file(&script);
+    let outcome = outcome?;
+    let devices: Vec<String> = outcome
+        .stdout
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("TIDE-DEVICE ").map(str::to_string))
+        .collect();
+    if devices.is_empty() {
+        return Err("SuperCollider reported no audio devices".to_string());
+    }
+    Ok(devices)
+}
+
+#[tauri::command]
+pub async fn audio_devices() -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(list_audio_devices)
+        .await
+        .map_err(|e| format!("audio_devices failed: {e}"))?
+}
+
 /// Dirt-Samples root (one directory per sample group). The engine boot script feeds this to
 /// `~dirt.loadSoundFiles` — SuperDirt's `start` does NOT load samples itself.
 pub fn find_dirt_samples() -> Option<PathBuf> {
@@ -608,6 +640,14 @@ mod tests {
         let parsed: Overrides = serde_json::from_str(r#"{"ghcPath":"/x/ghc"}"#).unwrap();
         assert_eq!(parsed.ghc_path.as_deref(), Some("/x/ghc"));
         assert_eq!(parsed.sclang_path, None);
+    }
+
+    #[test]
+    #[ignore = "requires SuperCollider (sclang) — enumerates audio devices (~3 s)"]
+    fn lists_audio_devices() {
+        let devices = list_audio_devices().unwrap();
+        println!("{devices:?}");
+        assert!(!devices.is_empty());
     }
 
     #[test]

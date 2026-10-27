@@ -15,6 +15,8 @@ const READY_TIMEOUT: Duration = Duration::from_secs(120);
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
 const MARKER_PLACEHOLDER: &str = "__TIDE_MARKER__";
 const SAMPLES_PLACEHOLDER: &str = "__TIDE_SAMPLES__";
+const IN_DEVICE_PLACEHOLDER: &str = "__TIDE_IN_DEVICE__";
+const OUT_DEVICE_PLACEHOLDER: &str = "__TIDE_OUT_DEVICE__";
 const BOOT_SCRIPT: &str = include_str!("../../resources/boot-superdirt.scd");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -30,6 +32,12 @@ pub enum EngineState {
     Starting,
     Live,
     Down,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct AudioDevices {
+    pub input: Option<String>,
+    pub output: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -50,7 +58,7 @@ impl Default for EngineStatus {
 }
 
 enum Cmd {
-    Start(Engine, PathBuf, Option<String>),
+    Start(Engine, PathBuf, Option<String>, AudioDevices),
     Stop,
 }
 
@@ -89,6 +97,7 @@ impl EngineLauncher {
         engine: Engine,
         data_dir: PathBuf,
         sclang_override: Option<String>,
+        devices: AudioDevices,
     ) -> Result<(), String> {
         set_status(
             &self.status,
@@ -97,7 +106,7 @@ impl EngineLauncher {
             "starting",
         );
         self.cmd_tx
-            .send(Cmd::Start(engine, data_dir, sclang_override))
+            .send(Cmd::Start(engine, data_dir, sclang_override, devices))
             .map_err(|_| "engine worker gone".to_string())
     }
 
@@ -157,11 +166,12 @@ fn worker_loop(rx: Receiver<Cmd>, evt: Sender<SessionEvent>, status: Arc<Mutex<E
         }
 
         match rx.recv_timeout(POLL_INTERVAL) {
-            Ok(Cmd::Start(engine, dir, sclang_override)) => {
+            Ok(Cmd::Start(engine, dir, sclang_override, devices)) => {
                 if let Some(old) = running.take() {
                     shutdown(old, &evt, &status, "restarted");
                 }
-                if let Ok(started) = start_engine(engine, &dir, sclang_override, &rx, &evt, &status)
+                if let Ok(started) =
+                    start_engine(engine, &dir, sclang_override, devices, &rx, &evt, &status)
                 {
                     running = started;
                 }
@@ -195,6 +205,7 @@ fn start_engine(
     engine: Engine,
     data_dir: &Path,
     sclang_override: Option<String>,
+    devices: AudioDevices,
     rx: &Receiver<Cmd>,
     evt: &Sender<SessionEvent>,
     status: &Arc<Mutex<EngineStatus>>,
@@ -210,7 +221,9 @@ fn start_engine(
             emit_engine(evt, engine, EngineState::Live, detail);
             Ok(None)
         }
-        Engine::SuperDirt => start_superdirt(data_dir, sclang_override, rx, evt, status).map(Some),
+        Engine::SuperDirt => {
+            start_superdirt(data_dir, sclang_override, devices, rx, evt, status).map(Some)
+        }
     }
 }
 
@@ -228,6 +241,7 @@ fn fail(
 fn start_superdirt(
     data_dir: &Path,
     sclang_override: Option<String>,
+    devices: AudioDevices,
     rx: &Receiver<Cmd>,
     evt: &Sender<SessionEvent>,
     status: &Arc<Mutex<EngineStatus>>,
@@ -244,7 +258,10 @@ fn start_superdirt(
     let _ = std::fs::remove_file(&marker);
     let samples = crate::toolchain::find_dirt_samples();
     let script = engine_dir.join("boot-superdirt.scd");
-    if let Err(e) = std::fs::write(&script, render_boot_script(&marker, samples.as_deref())) {
+    if let Err(e) = std::fs::write(
+        &script,
+        render_boot_script(&marker, samples.as_deref(), &devices),
+    ) {
         return fail(evt, status, format!("cannot write boot script: {e}"));
     }
 
@@ -506,9 +523,19 @@ fn port_held(port: u16) -> bool {
     }
 }
 
-fn render_boot_script(marker: &Path, samples: Option<&Path>) -> String {
+fn render_boot_script(marker: &Path, samples: Option<&Path>, devices: &AudioDevices) -> String {
     let samples = samples
         .map(|dir| escape_sc_string(&dir.display().to_string()))
+        .unwrap_or_default();
+    let input = devices
+        .input
+        .as_deref()
+        .map(escape_sc_string)
+        .unwrap_or_default();
+    let output = devices
+        .output
+        .as_deref()
+        .map(escape_sc_string)
         .unwrap_or_default();
     BOOT_SCRIPT
         .replace(
@@ -516,6 +543,8 @@ fn render_boot_script(marker: &Path, samples: Option<&Path>) -> String {
             &escape_sc_string(&marker.display().to_string()),
         )
         .replace(SAMPLES_PLACEHOLDER, &samples)
+        .replace(IN_DEVICE_PLACEHOLDER, &input)
+        .replace(OUT_DEVICE_PLACEHOLDER, &output)
 }
 
 fn escape_sc_string(raw: &str) -> String {
@@ -531,12 +560,19 @@ mod tests {
         let script = render_boot_script(
             Path::new(r#"C:\Users\me\"tIDE"\ready.txt"#),
             Some(Path::new(r#"C:\Users\me\samples"#)),
+            &AudioDevices {
+                input: Some("Mic \"Pro\"".to_string()),
+                output: Some("Speakers".to_string()),
+            },
         );
         assert!(!script.contains(MARKER_PLACEHOLDER));
         assert!(!script.contains(SAMPLES_PLACEHOLDER));
         assert!(script.contains(r#""C:\\Users\\me\\\"tIDE\"\\ready.txt""#));
         assert!(script.contains(r#""C:\\Users\\me\\samples""#));
         assert!(script.contains("SuperDirt(2, s)"));
+        assert!(script.contains("var inDevice = \"Mic \\\"Pro\\\"\";"));
+        assert!(script.contains("var outDevice = \"Speakers\";"));
+        assert!(script.contains("s.options.outDevice = outDevice;"));
         assert!(script.contains("loadSoundFiles"));
         assert!(script.contains("start(57120, 0 ! 16)"));
         assert!(script.contains("SynthDef(\\chip"));
@@ -546,9 +582,12 @@ mod tests {
         assert!(script.contains("maxNodes = 1024 * 32"));
 
         // Without a samples dir the script must still be valid and explicit about silence.
-        let headless_script = render_boot_script(Path::new("/tmp/ready.txt"), None);
+        let headless_script =
+            render_boot_script(Path::new("/tmp/ready.txt"), None, &AudioDevices::default());
         assert!(!headless_script.contains(SAMPLES_PLACEHOLDER));
         assert!(headless_script.contains("no Dirt-Samples directory configured"));
+        assert!(headless_script.contains("var inDevice = \"\";"));
+        assert!(headless_script.contains("var outDevice = \"\";"));
     }
 
     #[test]
@@ -589,7 +628,12 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         launcher
-            .start(Engine::SuperDirt, dir.clone(), None)
+            .start(
+                Engine::SuperDirt,
+                dir.clone(),
+                None,
+                AudioDevices::default(),
+            )
             .unwrap();
         let deadline = Instant::now() + Duration::from_secs(90);
         let mut live = false;

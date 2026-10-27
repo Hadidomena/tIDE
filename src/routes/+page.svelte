@@ -12,8 +12,11 @@
 		detectToolchain,
 		diagnostics,
 		initDiagnostics,
+		loadDevices,
 		resolveEngine,
 		setEngineChoice,
+		setInputDevice,
+		setOutputDevice,
 		type EngineChoice
 	} from '$lib/diagnostics.svelte';
 	import { session } from '$lib/session.svelte';
@@ -37,13 +40,23 @@ d1 $ s "bd sn:1 ~ hh"
 	onMount(() => {
 		void (async () => {
 			await initDiagnostics();
-			await session.connect(resolveEngine());
+			await session.connect(
+				resolveEngine(),
+				diagnostics.inputDevice || null,
+				diagnostics.outputDevice || null
+			);
 			void detectToolchain();
 		})();
 	});
 
 	$effect(() => {
 		void checkLastProject();
+	});
+
+	$effect(() => {
+		if (diagnostics.open && diagnostics.devices.length === 0 && !diagnostics.devicesLoading) {
+			void loadDevices();
+		}
 	});
 
 	$effect(() => {
@@ -125,7 +138,11 @@ d1 $ s "bd sn:1 ~ hh"
 	}
 
 	function restartWithEngine() {
-		void session.restart(resolveEngine());
+		void session.restart(
+			resolveEngine(),
+			diagnostics.inputDevice || null,
+			diagnostics.outputDevice || null
+		);
 	}
 
 	function onConsoleKey(e: KeyboardEvent) {
@@ -243,6 +260,41 @@ d1 $ s "bd sn:1 ~ hh"
 					<span class="muted">change applies on restart</span>
 				{/if}
 				<button class="tbtn" type="button" onclick={restartWithEngine}>restart session</button>
+			</div>
+
+			<div class="section">
+				<span class="label">audio device (applies on restart)</span>
+				<label class="field">
+					<span>input</span>
+					<select
+						value={diagnostics.inputDevice}
+						onchange={(e) => void setInputDevice(e.currentTarget.value)}
+					>
+						<option value="">system default (off)</option>
+						{#each diagnostics.devices as device (device)}
+							<option value={device}>{device}</option>
+						{/each}
+					</select>
+				</label>
+				<label class="field">
+					<span>output</span>
+					<select
+						value={diagnostics.outputDevice}
+						onchange={(e) => void setOutputDevice(e.currentTarget.value)}
+					>
+						<option value="">system default</option>
+						{#each diagnostics.devices as device (device)}
+							<option value={device}>{device}</option>
+						{/each}
+					</select>
+				</label>
+				<button
+					class="tbtn"
+					type="button"
+					disabled={diagnostics.devicesLoading}
+					onclick={() => void loadDevices()}
+					>{diagnostics.devicesLoading ? 'loading…' : 'refresh devices'}</button
+				>
 			</div>
 
 			{#if diagnostics.error}
@@ -520,6 +572,25 @@ d1 $ s "bd sn:1 ~ hh"
 
 	.segbtn.on {
 		background: color-mix(in srgb, var(--sw-pink) 22%, transparent);
+	}
+
+	.field {
+		display: flex;
+		flex-direction: column;
+		gap: 0.2rem;
+		width: 100%;
+		font-size: 0.68rem;
+	}
+
+	.field select {
+		width: 100%;
+		font: inherit;
+		font-size: 0.7rem;
+		color: var(--sw-text);
+		background: var(--sw-gutter);
+		border: 1px solid var(--sw-border);
+		border-radius: 4px;
+		padding: 0.2rem 0.3rem;
 	}
 
 	.status-line {

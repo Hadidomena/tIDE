@@ -9,7 +9,7 @@ use tauri_plugin_sql::{Migration, MigrationKind};
 
 use project::{project_open, project_save};
 use session::{Session, session_eval, session_eval_file, session_restart, session_start};
-use toolchain::toolchain_detect;
+use toolchain::{audio_devices, toolchain_detect};
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
@@ -43,7 +43,8 @@ pub fn run() {
             session_restart,
             project_open,
             project_save,
-            toolchain_detect
+            toolchain_detect,
+            audio_devices
         ])
         .build(tauri::generate_context!())
         .expect("error while building tIDE")

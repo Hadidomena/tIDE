@@ -32,7 +32,11 @@ class SessionModel {
 	private seq = 0;
 	private outputTail = '';
 
-	async connect(engine: string | null = null) {
+	async connect(
+		engine: string | null = null,
+		audioIn: string | null = null,
+		audioOut: string | null = null
+	) {
 		if (this.connected) return;
 		if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
 			this.push('system', 'not a Tauri window — use the app window from `npm run tauri dev`\n');
@@ -40,7 +44,7 @@ class SessionModel {
 		}
 		this.connected = true;
 		this.unlisten = await listen<WireEvent>('session://event', (e) => this.handle(e.payload));
-		await this.start(engine);
+		await this.start(engine, audioIn, audioOut);
 	}
 
 	private handle(ev: WireEvent) {
@@ -79,9 +83,13 @@ class SessionModel {
 		}
 	}
 
-	async start(engine: string | null = null) {
+	async start(
+		engine: string | null = null,
+		audioIn: string | null = null,
+		audioOut: string | null = null
+	) {
 		try {
-			this.state = await invoke<SessionState>('session_start', { engine });
+			this.state = await invoke<SessionState>('session_start', { engine, audioIn, audioOut });
 		} catch (e) {
 			this.push('system', `start failed: ${String(e)}\n`);
 		}
@@ -118,9 +126,13 @@ class SessionModel {
 		this.push('system', text.endsWith('\n') ? text : `${text}\n`);
 	}
 
-	async restart(engine: string | null = null) {
+	async restart(
+		engine: string | null = null,
+		audioIn: string | null = null,
+		audioOut: string | null = null
+	) {
 		try {
-			this.state = await invoke<SessionState>('session_restart', { engine });
+			this.state = await invoke<SessionState>('session_restart', { engine, audioIn, audioOut });
 		} catch (e) {
 			this.push('system', `restart failed: ${String(e)}\n`);
 		}

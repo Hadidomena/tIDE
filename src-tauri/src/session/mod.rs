@@ -1,6 +1,6 @@
 pub mod process;
 
-use crate::engine::{Engine, EngineLauncher, EngineState};
+use crate::engine::{AudioDevices, Engine, EngineLauncher, EngineState};
 use process::{
     PRELUDE, PROMPT_SETUP, Statement, is_ready, prelude_prompts, split_statements, wrap_code,
 };
@@ -60,8 +60,8 @@ enum Line {
 }
 
 enum Cmd {
-    Start(Engine, PathBuf),
-    Restart(Option<Engine>, PathBuf),
+    Start(Engine, PathBuf, AudioDevices),
+    Restart(Option<Engine>, PathBuf, AudioDevices),
     Stop,
     Eval(String, Option<usize>),
     Death { id: u32, reason: String },
@@ -149,9 +149,14 @@ impl Session {
             .map_err(|_| "session worker gone".to_string())
     }
 
-    pub fn start(&self, engine: Engine, data_dir: PathBuf) -> Result<(), String> {
+    pub fn start(
+        &self,
+        engine: Engine,
+        data_dir: PathBuf,
+        devices: AudioDevices,
+    ) -> Result<(), String> {
         *self.state.lock().unwrap() = SessionState::Starting;
-        if let Err(e) = self.send(Cmd::Start(engine, data_dir)) {
+        if let Err(e) = self.send(Cmd::Start(engine, data_dir, devices)) {
             *self.state.lock().unwrap() = SessionState::Stopped;
             return Err(e);
         }
@@ -169,9 +174,14 @@ impl Session {
         Ok(statements.len())
     }
 
-    pub fn restart(&self, engine: Option<Engine>, data_dir: PathBuf) -> Result<(), String> {
+    pub fn restart(
+        &self,
+        engine: Option<Engine>,
+        data_dir: PathBuf,
+        devices: AudioDevices,
+    ) -> Result<(), String> {
         *self.state.lock().unwrap() = SessionState::Starting;
-        if let Err(e) = self.send(Cmd::Restart(engine, data_dir)) {
+        if let Err(e) = self.send(Cmd::Restart(engine, data_dir, devices)) {
             *self.state.lock().unwrap() = SessionState::Stopped;
             return Err(e);
         }
@@ -205,6 +215,8 @@ impl Session {
 #[tauri::command]
 pub fn session_start(
     engine: Option<String>,
+    audio_in: Option<String>,
+    audio_out: Option<String>,
     session: State<'_, Session>,
     app: AppHandle,
 ) -> Result<SessionState, String> {
@@ -227,9 +239,20 @@ pub fn session_start(
             .path()
             .app_data_dir()
             .map_err(|e| format!("app data dir unavailable: {e}"))?;
-        session.start(engine, data_dir)?;
+        session.start(
+            engine,
+            data_dir,
+            AudioDevices {
+                input: clean_device(audio_in),
+                output: clean_device(audio_out),
+            },
+        )?;
     }
     Ok(session.state())
+}
+
+fn clean_device(name: Option<String>) -> Option<String> {
+    name.filter(|n| !n.trim().is_empty())
 }
 
 #[tauri::command]
@@ -264,6 +287,8 @@ pub fn session_eval_file(code: String, session: State<'_, Session>) -> Result<us
 #[tauri::command]
 pub fn session_restart(
     engine: Option<String>,
+    audio_in: Option<String>,
+    audio_out: Option<String>,
     session: State<'_, Session>,
     app: AppHandle,
 ) -> Result<SessionState, String> {
@@ -282,7 +307,14 @@ pub fn session_restart(
         .path()
         .app_data_dir()
         .map_err(|e| format!("app data dir unavailable: {e}"))?;
-    session.restart(engine, data_dir)?;
+    session.restart(
+        engine,
+        data_dir,
+        AudioDevices {
+            input: clean_device(audio_in),
+            output: clean_device(audio_out),
+        },
+    )?;
     Ok(session.state())
 }
 
@@ -490,13 +522,14 @@ fn wait_engine(launcher: &EngineLauncher) -> Result<(), String> {
 fn do_start(
     engine: Engine,
     data_dir: &Path,
+    devices: &AudioDevices,
     launcher: &EngineLauncher,
     monitor_tx: &Sender<Cmd>,
     evt: &Events,
     id: u32,
 ) -> Result<Active, String> {
     launcher
-        .start(engine, data_dir.to_path_buf(), None)
+        .start(engine, data_dir.to_path_buf(), None, devices.clone())
         .map_err(|e| format!("engine start failed: {e}"))?;
     wait_engine(launcher)?;
 
@@ -545,6 +578,7 @@ fn do_start(
 fn begin_session(
     kind: Engine,
     data_dir: &Path,
+    devices: &AudioDevices,
     active: &mut Option<Active>,
     next_id: &mut u32,
     monitor_tx: &Sender<Cmd>,
@@ -555,7 +589,7 @@ fn begin_session(
     kill(active);
     engine.stop();
     set_state(state, evt, SessionState::Starting);
-    match do_start(kind, data_dir, engine, monitor_tx, evt, *next_id) {
+    match do_start(kind, data_dir, devices, engine, monitor_tx, evt, *next_id) {
         Ok(a) => {
             *next_id += 1;
             *active = Some(a);
@@ -578,7 +612,7 @@ fn worker_loop(
 ) {
     let mut active: Option<Active> = None;
     let mut next_id: u32 = 0;
-    let mut config: Option<(Engine, PathBuf)> = None;
+    let mut config: Option<(Engine, PathBuf, AudioDevices)> = None;
 
     loop {
         let cmd = match cmd_rx.recv() {
@@ -591,11 +625,12 @@ fn worker_loop(
         };
 
         match cmd {
-            Cmd::Start(kind, data_dir) => {
-                config = Some((kind, data_dir.clone()));
+            Cmd::Start(kind, data_dir, devices) => {
+                config = Some((kind, data_dir.clone(), devices.clone()));
                 begin_session(
                     kind,
                     &data_dir,
+                    &devices,
                     &mut active,
                     &mut next_id,
                     &monitor_tx,
@@ -605,18 +640,19 @@ fn worker_loop(
                 );
             }
 
-            Cmd::Restart(engine_kind, data_dir) => {
+            Cmd::Restart(engine_kind, data_dir, devices) => {
                 let target = match engine_kind {
                     Some(kind) => {
-                        config = Some((kind, data_dir.clone()));
-                        Some((kind, data_dir))
+                        config = Some((kind, data_dir.clone(), devices.clone()));
+                        Some((kind, data_dir, devices))
                     }
                     None => config.clone(),
                 };
                 match target {
-                    Some((kind, dir)) => begin_session(
+                    Some((kind, dir, devices)) => begin_session(
                         kind,
                         &dir,
+                        &devices,
                         &mut active,
                         &mut next_id,
                         &monitor_tx,
@@ -781,7 +817,8 @@ mod tests {
     #[test]
     fn restart_without_prior_start_returns_to_stopped() {
         let (sess, _rx) = Session::for_test();
-        sess.restart(None, std::env::temp_dir()).unwrap();
+        sess.restart(None, std::env::temp_dir(), AudioDevices::default())
+            .unwrap();
         assert!(
             wait_for_state(&sess, SessionState::Stopped, 5),
             "restart with no config must not leave the session in Starting"
@@ -792,7 +829,12 @@ mod tests {
     #[ignore = "requires working ghci + tidal (m1-plan step 0 probe must print TIDAL-PROBE-OK)"]
     fn stateful_ghci_session() {
         let (sess, mut rx) = Session::for_test();
-        sess.start(Engine::Headless, std::env::temp_dir()).unwrap();
+        sess.start(
+            Engine::Headless,
+            std::env::temp_dir(),
+            AudioDevices::default(),
+        )
+        .unwrap();
         assert!(
             wait_for_state(&sess, SessionState::Ready, 90),
             "ghci startup timed out; events:\n{}",
@@ -813,7 +855,8 @@ mod tests {
         );
         assert_eq!(sess.state(), SessionState::Ready);
 
-        sess.restart(None, std::env::temp_dir()).unwrap();
+        sess.restart(None, std::env::temp_dir(), AudioDevices::default())
+            .unwrap();
         assert!(
             wait_for_state(&sess, SessionState::Ready, 60),
             "restart timed out"
@@ -828,7 +871,12 @@ mod tests {
     #[ignore = "requires working ghci + tidal (headless; run-file queueing)"]
     fn run_file_replays_in_order() {
         let (sess, mut rx) = Session::for_test();
-        sess.start(Engine::Headless, std::env::temp_dir()).unwrap();
+        sess.start(
+            Engine::Headless,
+            std::env::temp_dir(),
+            AudioDevices::default(),
+        )
+        .unwrap();
         assert!(
             wait_for_state(&sess, SessionState::Ready, 90),
             "session startup timed out"
@@ -869,7 +917,12 @@ mod tests {
     #[ignore = "requires working ghci + tidal (headless prelude, no audio device needed)"]
     fn headless_session_prelude() {
         let (sess, mut rx) = Session::for_test();
-        sess.start(Engine::Headless, std::env::temp_dir()).unwrap();
+        sess.start(
+            Engine::Headless,
+            std::env::temp_dir(),
+            AudioDevices::default(),
+        )
+        .unwrap();
         assert!(
             wait_for_state(&sess, SessionState::Ready, 90),
             "headless session startup timed out (prelude not verified); events:\n{}",
@@ -912,7 +965,8 @@ mod tests {
         let (sess, mut rx) = Session::for_test();
         let data_dir =
             std::env::temp_dir().join(format!("tide-session-smoke-{}", std::process::id()));
-        sess.start(Engine::SuperDirt, data_dir.clone()).unwrap();
+        sess.start(Engine::SuperDirt, data_dir.clone(), AudioDevices::default())
+            .unwrap();
         assert!(
             wait_for_state(&sess, SessionState::Ready, 120),
             "superdirt session startup timed out; events:\n{}",

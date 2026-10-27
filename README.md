@@ -60,6 +60,10 @@ Open the **Diagnostics** pane in the app to see exactly what is detected and wha
 
 ### Boot Aliases
 
+Audio input/output devices can be selected in **Diagnostics** (the list comes from SuperCollider
+itself). Changing them applies after restarting the session; an input device is optional and
+disabled by default (avoids sample-rate mismatches with a 16 kHz mic).
+
 The full set of Tidal boot aliases is available: `setcps`, `setbpm`, `getcps`, `getbpm`, `solo`,
 `unsolo`, `mute`, `unmute`, `once`, `first`, `asap`, `all`, `nudgeAll`, `resetCycles`, `hush`,
 `panic`, and `d1`…`d16` (each `dN` uses orbit N−1).

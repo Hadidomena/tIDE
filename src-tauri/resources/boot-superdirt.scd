@@ -1,6 +1,8 @@
 (
 var marker = "__TIDE_MARKER__";
 var samples = "__TIDE_SAMPLES__";
+var inDevice = "__TIDE_IN_DEVICE__";
+var outDevice = "__TIDE_OUT_DEVICE__";
 var writeMarker = { |text|
 	var f = File(marker, "w");
 	f.write(text ++ "\n");
@@ -31,6 +33,13 @@ var chipSynths = {
 	s.sync;
 };
 s.options.numInputBusChannels = 0;
+if (inDevice.size > 0) {
+	s.options.inDevice = inDevice;
+	s.options.numInputBusChannels = 2;
+};
+if (outDevice.size > 0) {
+	s.options.outDevice = outDevice;
+};
 s.options.numBuffers = 1024 * 256;
 s.options.memSize = 8192 * 32;
 s.options.maxNodes = 1024 * 32;
