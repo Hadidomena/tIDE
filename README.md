@@ -2,17 +2,11 @@
 
 tIDE is an integrated development environment for the Tidal language.
 
-**Status:** M2 — editor with Tidal highlighting, live GHCi session, SuperDirt/headless engine
+**Status:** editor with Tidal highlighting, live GHCi session, SuperDirt/headless engine
 orchestration, toolchain detection + diagnostics, project open/save. Sample library, transforms
 and pattern analysis land in later milestones.
 
 ## Prerequisites
-
-**Build tooling**
-
-- **Node.js (LTS)** — via [mise](https://mise.jdx.dev): `mise use -g node@lts`
-- **Rust** (stable) — `rustup`
-- **Lefthook** — `brew install lefthook` (macOS); git hooks are mandatory in this repo
 
 **To actually run Tidal code (detected and diagnosed by the app)**
 
@@ -34,9 +28,29 @@ and pattern analysis land in later milestones.
    Dirt-Samples pack (~400 MB). tIDE starts/stops SuperCollider itself; you don't need to run the
    IDE while using tIDE.
 
-Open the **Diagnostics** pane in the app to see exactly what is detected and what to install.
+Open the **Diagnostics** pane in the app to see exactly what is detected and what is yet to install.
+
+## Keybinds
+   - `Cmd/Ctrl+Enter` evaluates current line or selection
+   - `Cmd/Ctrl+Shift+Enter` or the **run file** button replays the whole file statement by statement
+   - `Cmd/Ctrl+.` or the hush button silences all patterns
+
+## Additional instruments
+- `chip`
+- `chipbass`
+- `chipled`
+- `chipnoise`
+
+**Example of usage:**
+- `d1 $ s "chipbass" # note "c2 eb2 g2 bb2" # legato 0.8`
 
 ## Quickstart (development)
+
+**Build tooling (dev only)**
+
+- **Node.js (LTS)** — via [mise](https://mise.jdx.dev): `mise use -g node@lts`
+- **Rust** (stable) — `rustup`
+- **Lefthook** — `brew install lefthook` (macOS); git hooks are mandatory in this repo
 
 ```sh
 git clone https://github.com/Hadidomena/tIDE.git
@@ -46,16 +60,10 @@ npm install
 npm run tauri dev         # opens the app window (use the native window)
 ```
 
-In the window: `Cmd/Ctrl+Enter` evaluates the current line or selection, `Cmd/Ctrl+Shift+Enter`
-(or the **run file** button) replays the whole file statement by statement, `Cmd/Ctrl+.` (or the
-hush button) silences all patterns. To reproduce a file's state exactly, hit **restart** first
+To reproduce a file's state exactly, hit **restart** first
 (fresh prelude, no leftover bindings) and then run the file. The engine is selected in
 Diagnostics: `auto` (SuperDirt when detected, otherwise headless), or explicitly
-`superdirt` / `headless`.
-
-Built-in additional instruments (no samples needed): `chip`, `chipbass`, `chipled`, `chipnoise` —
-for example `d1 $ s "chipbass" # note "c2 eb2 g2 bb2" # legato 0.8`.
-Useful scripts: `npm run lint` (ESLint), `npm run format` (Prettier), `npm run check`
+`superdirt` / `headless`. Useful scripts: `npm run lint` (ESLint), `npm run format` (Prettier), `npm run check`
 (svelte-check), and `cd src-tauri && cargo test` / `cargo clippy --all-targets -- -D warnings`.
 
 ## Git hooks (lefthook)
