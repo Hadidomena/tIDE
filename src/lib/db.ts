@@ -1,10 +1,13 @@
 import Database from '@tauri-apps/plugin-sql';
 
-let db: Database | undefined;
+let dbPromise: Promise<Database> | undefined;
 
-export async function getDb(): Promise<Database> {
-	db ??= await Database.load('sqlite:tide.db');
-	return db;
+export function getDb(): Promise<Database> {
+	dbPromise ??= Database.load('sqlite:tide.db').catch((e) => {
+		dbPromise = undefined;
+		throw e;
+	});
+	return dbPromise;
 }
 
 export async function getSetting(key: string): Promise<string | null> {

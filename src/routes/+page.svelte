@@ -308,6 +308,14 @@ d1 $ s "bd sn:1 ~ hh"
 		background: #e74c3c;
 	}
 
+	.chip.live .dot {
+		background: #2ecc71;
+	}
+
+	.chip.down .dot {
+		background: #e74c3c;
+	}
+
 	@keyframes pulse {
 		50% {
 			opacity: 0.25;
