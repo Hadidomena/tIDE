@@ -37,7 +37,6 @@ Open the **Diagnostics** pane in the app to see exactly what is detected and wha
 | Shortcut                                 | Action                                     |
 | ---------------------------------------- | ------------------------------------------ |
 | `Cmd/Ctrl+Enter`                         | evaluate the current line or selection     |
-| `Ctrl+Enter` (macOS alias)               | same as above                              |
 | `Cmd/Ctrl+Shift+Enter`                   | run the whole file, statement by statement |
 | `Cmd/Ctrl+.`                             | hush — silence all running patterns        |
 | `Cmd/Ctrl+S`                             | save                                       |
