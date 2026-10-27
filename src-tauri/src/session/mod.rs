@@ -342,7 +342,42 @@ fn kill(active: &mut Option<Active>) {
     }
 }
 
+/// SIGTERM ghci processes left behind by a killed app (they hold Tidal's control port
+/// 6010). Only orphans (ppid 1) with our exact spawn args are touched — a ghci the user
+/// runs from a terminal has a live parent and is left alone.
+#[cfg(unix)]
+fn reap_orphaned_ghci() {
+    let Ok(output) = Command::new("pgrep")
+        .args(["-f", "ignore-dot-ghci -package tidal"])
+        .output()
+    else {
+        return;
+    };
+    for pid in String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.trim().parse::<u32>().ok())
+    {
+        let ppid = Command::new("ps")
+            .args(["-o", "ppid=", "-p", &pid.to_string()])
+            .output()
+            .ok()
+            .and_then(|out| {
+                String::from_utf8_lossy(&out.stdout)
+                    .trim()
+                    .parse::<u32>()
+                    .ok()
+            });
+        if ppid == Some(1) {
+            let _ = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn reap_orphaned_ghci() {}
+
 fn launch(monitor_tx: &Sender<Cmd>, id: u32) -> Result<Active, String> {
+    reap_orphaned_ghci();
     let spawned = Command::new("ghci")
         .args(["-ignore-dot-ghci", "-package", "tidal"])
         .env("TERM", "dumb")
