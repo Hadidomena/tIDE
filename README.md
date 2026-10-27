@@ -18,12 +18,12 @@ and pattern analysis land in later milestones.
 
 1. **GHC + cabal** via [ghcup](https://www.haskell.org/ghcup/), then:
    ```sh
-   brew install cmake                      # tidal-link's native build needs it (apt: cmake)
    cabal update && cabal install --lib tidal
    ```
    The `--lib` flag is required: plain `cabal install` registers no library for GHCi.
    Note: `ghc-pkg list` will not show this install (cabal uses a GHC environment file) — tIDE's
-   detector accounts for that.
+   detector accounts for that. The build needs a C++ toolchain (Xcode Command Line Tools on macOS,
+   `build-essential` on Linux);
    Verify: `echo ':q' | ghci -package tidal -e 'import Sound.Tidal.Context'`
 2. **SuperCollider + SuperDirt** (optional — without it tIDE runs in _headless_ mode: evaluation
    works, no sound):
