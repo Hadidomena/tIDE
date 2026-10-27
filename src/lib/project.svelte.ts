@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { open, save } from '@tauri-apps/plugin-dialog';
-import Database from '@tauri-apps/plugin-sql';
+import { getDb, setSetting } from './db';
 import { session } from './session.svelte';
 
 export interface OpenedFile {
@@ -15,13 +15,6 @@ export const project = $state({
 	title: 'untitled',
 	hasLast: false
 });
-
-let db: Database | undefined;
-
-async function getDb(): Promise<Database> {
-	db ??= await Database.load('sqlite:tide.db');
-	return db;
-}
 
 function splitPath(path: string) {
 	const i = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
@@ -42,12 +35,7 @@ async function registerProject(path: string) {
 		);
 		const id = rows[0]?.id;
 		if (id !== undefined) {
-			await d.execute(
-				`INSERT INTO settings (key, value, updated_at)
-				 VALUES ('last_project_id', $1, $2)
-				 ON CONFLICT(key) DO UPDATE SET value = $1, updated_at = $2`,
-				[String(id), now]
-			);
+			await setSetting('last_project_id', String(id));
 			project.hasLast = true;
 		}
 	} catch (e) {

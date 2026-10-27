@@ -48,14 +48,11 @@ jobs:
         run: cargo test
         working-directory: src-tauri
 
-  # Dispatch-only (a 15-30 min cabal compile per PR is not free-CI-friendly).
-  # Runs the #[ignore]d supervisor integration test against REAL ghci + tidal (m1-plan step 6).
   repl-integration:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-      # webkit stack for tauri crates + cmake — tidal-link C++ build (bit us on the dev machine)
       - name: system deps
         run: |
           sudo apt update
@@ -70,9 +67,6 @@ jobs:
           key: ghcup-ghc-9.10.3-tidal-v2
       - name: install ghc 9.10.3 + cabal (runner preinstalled ghcup)
         run: |
-          # The ubuntu runner image ships ghcup under /usr/local/.ghcup (root-owned); the
-          # get-ghcup bootstrap collides with pre-seeded binaries there and in ~/.ghcup
-          # (3 failed runs). Take over the preinstall instead of installing ghcup at all.
           sudo mkdir -p /usr/local/.ghcup
           sudo chown -R "$USER" /usr/local/.ghcup
           test -x /usr/local/.ghcup/bin/ghcup || { echo "image has no preinstalled ghcup?"; exit 1; }
@@ -94,6 +88,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: 'src-tauri' }
-      - name: ghci session integration tests
-        run: cargo test -- --ignored
+      - name: ghci sessions + prelude + detector integration tests
+        run: cargo test -- --ignored --test-threads=1 --skip superdirt
         working-directory: src-tauri

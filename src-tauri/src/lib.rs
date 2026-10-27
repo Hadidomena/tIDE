@@ -9,6 +9,7 @@ use tauri_plugin_sql::{Migration, MigrationKind};
 
 use project::{project_open, project_save};
 use session::{Session, session_eval, session_restart, session_start};
+use toolchain::toolchain_detect;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
@@ -40,13 +41,15 @@ pub fn run() {
             session_eval,
             session_restart,
             project_open,
-            project_save
+            project_save,
+            toolchain_detect
         ])
         .build(tauri::generate_context!())
         .expect("error while building tIDE")
         .run(|app_handle, event| {
             if let tauri::RunEvent::Exit = event {
                 use tauri::Manager;
+                // Blocks until ghci *and* the engine are down — no orphaned synths.
                 app_handle.state::<Session>().stop();
             }
         });
