@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { EditorState, Prec, StateEffect, StateField } from '@codemirror/state';
 	import { Decoration, type DecorationSet, EditorView, keymap } from '@codemirror/view';
-	import { LanguageSupport } from '@codemirror/language';
+	import { HighlightStyle, LanguageSupport, syntaxHighlighting } from '@codemirror/language';
+	import { tags } from '@lezer/highlight';
 	import { acceptCompletion, autocompletion, completeAnyWord } from '@codemirror/autocomplete';
 	import { indentLess, indentMore } from '@codemirror/commands';
 	import { basicSetup } from 'codemirror';
@@ -36,6 +37,38 @@
 				{ key: 'Shift-Tab', run: indentLess }
 			])
 		)
+	]);
+
+	const synthwaveTheme = EditorView.theme(
+		{
+			'&': { backgroundColor: '#000000', color: '#ffffff' },
+			'.cm-content': { caretColor: '#fede5d' },
+			'.cm-cursor, .cm-dropCursor': { borderLeftColor: '#fede5d' },
+			'.cm-selectionBackground, .cm-content ::selection': {
+				backgroundColor: '#001069'
+			},
+			'&.cm-focused .cm-selectionBackground, .cm-content ::selection': {
+				backgroundColor: '#001069'
+			},
+			'.cm-activeLine': { backgroundColor: 'rgba(255, 255, 255, 0.04)' },
+			'.cm-activeLineGutter': { backgroundColor: '#141414', color: '#ffffff' }
+		},
+		{ dark: true }
+	);
+
+	const synthwaveHighlight = HighlightStyle.define([
+		{ tag: tags.comment, color: '#848bbd', fontStyle: 'italic' },
+		{ tag: [tags.keyword, tags.operatorKeyword], color: '#fede5d' },
+		{ tag: [tags.operator, tags.punctuation, tags.bracket], color: '#fede5d' },
+		{ tag: tags.number, color: '#f97e72' },
+		{ tag: tags.string, color: '#ff8b39' },
+		{ tag: tags.typeName, color: '#fe4450' },
+		{ tag: tags.variableName, color: '#f73232' },
+		{ tag: tags.function(tags.variableName), color: '#36f9f6' },
+		{ tag: tags.definition(tags.variableName), color: '#36f9f6' },
+		{ tag: [tags.bool, tags.null], color: '#1afc65' },
+		{ tag: tags.meta, color: '#848bbd' },
+		{ tag: tags.invalid, color: '#ff5252' }
 	]);
 
 	function lineOrSelection(v: EditorView): { code: string; line: number } {
@@ -78,6 +111,8 @@
 				extensions: [
 					basicSetup,
 					tidalSupport,
+					synthwaveTheme,
+					syntaxHighlighting(synthwaveHighlight),
 					errorLineField,
 					Prec.high(
 						keymap.of([
@@ -146,6 +181,14 @@
 	:global(.editor-host .cm-editor) {
 		height: 100%;
 		font-size: 14px;
+		background: var(--sw-bg);
+		color: var(--sw-text);
+	}
+
+	:global(.editor-host .cm-gutters) {
+		background: var(--sw-gutter);
+		color: var(--sw-grey);
+		border-right: 1px solid var(--sw-border);
 	}
 
 	:global(.editor-host .cm-scroller) {
@@ -153,54 +196,28 @@
 	}
 
 	:global(.editor-host .cm-error-line) {
-		background: color-mix(in srgb, #d12631 14%, transparent);
-	}
-
-	@media (prefers-color-scheme: dark) {
-		:global(.editor-host .cm-error-line) {
-			background: color-mix(in srgb, #ff6369 20%, transparent);
-		}
+		background: color-mix(in srgb, var(--sw-red) 15%, transparent);
 	}
 
 	:global(.cm-tooltip.cm-tooltip-autocomplete) {
-		background: #ffffff;
-		color: #1e1e24;
-		border: 1px solid #9a9aa2;
+		background: var(--sw-surface);
+		color: var(--sw-text);
+		border: 1px solid var(--sw-border);
 	}
 
 	:global(.cm-tooltip-autocomplete > ul > li[aria-selected]) {
-		background: #dbe6ff;
-		color: #1e1e24;
+		background: var(--sw-selection);
+		color: var(--sw-text);
 	}
 
 	:global(.cm-tooltip.cm-completionInfo) {
-		background: #ffffff;
-		color: #1e1e24;
-		border: 1px solid #9a9aa2;
+		background: var(--sw-surface);
+		color: var(--sw-text);
+		border: 1px solid var(--sw-border);
 	}
 
 	:global(.cm-completionDetail) {
-		color: #4a4a52;
+		color: var(--sw-muted);
 		font-style: italic;
-	}
-
-	@media (prefers-color-scheme: dark) {
-		:global(.cm-tooltip.cm-tooltip-autocomplete) {
-			background: #2a2a32;
-			color: #f1f1f4;
-			border-color: #55555f;
-		}
-		:global(.cm-tooltip.cm-completionInfo) {
-			background: #2a2a32;
-			color: #f1f1f4;
-			border-color: #55555f;
-		}
-		:global(.cm-tooltip-autocomplete > ul > li[aria-selected]) {
-			background: #3a4a6a;
-			color: #ffffff;
-		}
-		:global(.cm-completionDetail) {
-			color: #c8c8d0;
-		}
 	}
 </style>

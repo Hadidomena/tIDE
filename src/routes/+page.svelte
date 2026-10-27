@@ -277,9 +277,30 @@ d1 $ s "bd sn:1 ~ hh"
 </main>
 
 <style>
+	:global(:root) {
+		color-scheme: dark;
+		--sw-bg: #000000;
+		--sw-surface: #1e1e1e;
+		--sw-selection: #001069;
+		--sw-text: #ffffff;
+		--sw-muted: #848bbd;
+		--sw-hint: #a6a6a6;
+		--sw-red: #ff5252;
+		--sw-orange: #ffab40;
+		--sw-yellow: #fede5d;
+		--sw-green: #72f1b8;
+		--sw-blue: #36f9f6;
+		--sw-pink: #ff3366;
+		--sw-grey: #808080;
+		--sw-gutter: #141414;
+		--sw-border: color-mix(in srgb, #ff3366 45%, transparent);
+	}
+
 	:global(body) {
 		margin: 0;
 		font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
+		background-color: var(--sw-bg);
+		color: var(--sw-text);
 	}
 
 	header {
@@ -287,7 +308,7 @@ d1 $ s "bd sn:1 ~ hh"
 		align-items: center;
 		gap: 1rem;
 		padding: 0.45rem 1rem;
-		border-bottom: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+		border-bottom: 1px solid color-mix(in srgb, var(--sw-pink) 40%, transparent);
 	}
 
 	h1 {
@@ -302,34 +323,34 @@ d1 $ s "bd sn:1 ~ hh"
 		font-size: 0.72rem;
 		padding: 0.18rem 0.6rem;
 		border-radius: 999px;
-		background: color-mix(in srgb, currentColor 10%, transparent);
+		background: color-mix(in srgb, var(--sw-pink) 12%, transparent);
 	}
 
 	.dot {
 		width: 0.5rem;
 		height: 0.5rem;
 		border-radius: 50%;
-		background: #888;
+		background: var(--sw-grey);
 	}
 
 	.chip.ready .dot {
-		background: #2ecc71;
+		background: var(--sw-green);
 	}
 	.chip.busy .dot,
 	.chip.starting .dot {
-		background: #f1c40f;
+		background: var(--sw-yellow);
 		animation: pulse 0.8s infinite;
 	}
 	.chip.failed .dot {
-		background: #e74c3c;
+		background: var(--sw-red);
 	}
 
 	.chip.live .dot {
-		background: #2ecc71;
+		background: var(--sw-green);
 	}
 
 	.chip.down .dot {
-		background: #e74c3c;
+		background: var(--sw-red);
 	}
 
 	@keyframes pulse {
@@ -343,7 +364,7 @@ d1 $ s "bd sn:1 ~ hh"
 		font-size: 0.72rem;
 		padding: 0.15rem 0.7rem;
 		border-radius: 6px;
-		border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+		border: 1px solid color-mix(in srgb, var(--sw-pink) 45%, transparent);
 		background: transparent;
 		color: inherit;
 		cursor: pointer;
@@ -392,7 +413,7 @@ d1 $ s "bd sn:1 ~ hh"
 		display: flex;
 		flex-direction: column;
 		gap: 0.4rem;
-		border-left: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+		border-left: 1px solid color-mix(in srgb, var(--sw-pink) 35%, transparent);
 		padding: 0.5rem 0.75rem;
 		overflow: hidden;
 	}
@@ -413,12 +434,12 @@ d1 $ s "bd sn:1 ~ hh"
 		align-items: center;
 		gap: 0.4rem;
 		padding-top: 0.3rem;
-		border-top: 1px solid color-mix(in srgb, currentColor 15%, transparent);
+		border-top: 1px solid color-mix(in srgb, var(--sw-pink) 25%, transparent);
 	}
 
 	.console-row .prompt {
 		font-family: Menlo, monospace;
-		color: #2ecc71;
+		color: var(--sw-green);
 	}
 
 	.console-row input {
@@ -433,20 +454,20 @@ d1 $ s "bd sn:1 ~ hh"
 	}
 
 	.stderr {
-		color: #c62828;
+		color: var(--sw-red);
 	}
 
 	.engine {
-		color: #3f63b8;
+		color: var(--sw-blue);
 	}
 
 	.system {
-		color: #9a5b00;
+		color: var(--sw-orange);
 		font-style: italic;
 	}
 
 	.diag {
-		border-left: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+		border-left: 1px solid color-mix(in srgb, var(--sw-pink) 35%, transparent);
 		padding: 0.55rem 0.75rem;
 		overflow-y: auto;
 		font-size: 0.74rem;
@@ -478,7 +499,7 @@ d1 $ s "bd sn:1 ~ hh"
 
 	.seg {
 		display: inline-flex;
-		border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+		border: 1px solid color-mix(in srgb, var(--sw-pink) 45%, transparent);
 		border-radius: 6px;
 		overflow: hidden;
 	}
@@ -494,11 +515,11 @@ d1 $ s "bd sn:1 ~ hh"
 	}
 
 	.segbtn + .segbtn {
-		border-left: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+		border-left: 1px solid color-mix(in srgb, var(--sw-pink) 35%, transparent);
 	}
 
 	.segbtn.on {
-		background: color-mix(in srgb, currentColor 18%, transparent);
+		background: color-mix(in srgb, var(--sw-pink) 22%, transparent);
 	}
 
 	.status-line {
@@ -523,15 +544,15 @@ d1 $ s "bd sn:1 ~ hh"
 	}
 
 	.probe.ok .dot {
-		background: #2ecc71;
+		background: var(--sw-green);
 	}
 
 	.probe.warn .dot {
-		background: #f1c40f;
+		background: var(--sw-yellow);
 	}
 
 	.probe.missing .dot {
-		background: #e74c3c;
+		background: var(--sw-red);
 	}
 
 	.probe-text {
@@ -540,7 +561,7 @@ d1 $ s "bd sn:1 ~ hh"
 	}
 
 	.muted {
-		color: #4c4c56;
+		color: var(--sw-muted);
 	}
 
 	.hint {
@@ -549,7 +570,7 @@ d1 $ s "bd sn:1 ~ hh"
 		padding: 0;
 		border: none;
 		background: none;
-		color: #3f3f48;
+		color: var(--sw-hint);
 		font: inherit;
 		font-size: 0.68rem;
 		text-align: left;
@@ -558,29 +579,6 @@ d1 $ s "bd sn:1 ~ hh"
 	}
 
 	.error {
-		color: #c62828;
-	}
-
-	@media (prefers-color-scheme: dark) {
-		:global(body) {
-			background-color: #1e1e24;
-			color: #eaeaea;
-		}
-		.stderr,
-		.error {
-			color: #ff6369;
-		}
-		.engine {
-			color: #8fb0ff;
-		}
-		.system {
-			color: #e8a33d;
-		}
-		.muted {
-			color: #b9b9c4;
-		}
-		.hint {
-			color: #d3d3dc;
-		}
+		color: var(--sw-red);
 	}
 </style>
