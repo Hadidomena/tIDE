@@ -8,7 +8,7 @@ pub mod toolchain;
 use tauri_plugin_sql::{Migration, MigrationKind};
 
 use project::{project_open, project_save};
-use session::{Session, session_eval, session_restart, session_start};
+use session::{Session, session_eval, session_eval_file, session_restart, session_start};
 use toolchain::toolchain_detect;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
@@ -39,6 +39,7 @@ pub fn run() {
             greet,
             session_start,
             session_eval,
+            session_eval_file,
             session_restart,
             project_open,
             project_save,

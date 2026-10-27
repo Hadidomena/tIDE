@@ -1,20 +1,10 @@
 pub const TOP_PROMPT: &str = "tIDE> ";
 pub const CONT_PROMPT: &str = "tIDE| ";
-/// Prompt + the two language pragmas the canonical Tidal boot file carries. Without
-/// `OverloadedStrings`, `s "bd"` fails as `[Char]` vs `Pattern String`; without
-/// `ExtendedDefaultRules`, numeric literals in patterns don't default to the Tidal types.
 pub const PROMPT_SETUP: &str = ":set prompt \"tIDE> \"\n\
 :set prompt-cont \"tIDE| \"\n\
 :set -XOverloadedStrings\n\
 :set -XExtendedDefaultRules\n";
 
-/// Session prelude — verified verbatim in the M2 step-0 spike (tidal 1.10.3).
-///
-/// `startTidal` binds **nothing**: `d1..d8`/`hush` need explicit `let` bindings via
-/// `streamReplace`/`streamHush`. Sent as **separate GHCi statements**, never as one
-/// `:{ … :}` block — GHCi's multi-line mode rejects mixed import + `x <- io` lines.
-/// Each statement produces exactly one prompt echo, so startup uses
-/// [`prelude_prompts`] with the same prompt-count pump as [`PROMPT_SETUP`].
 pub const PRELUDE: &str = "import Sound.Tidal.Context\n\
 tidal <- startTidal superdirtTarget defaultConfig\n\
 let d1 = streamReplace tidal 1\n\
@@ -27,9 +17,64 @@ let d7 = streamReplace tidal 7\n\
 let d8 = streamReplace tidal 8\n\
 let hush = streamHush tidal\n";
 
-/// Number of prompt echoes the prelude produces (one per statement).
 pub fn prelude_prompts() -> usize {
     PRELUDE.matches('\n').count()
+}
+
+pub fn split_statements(source: &str) -> Vec<String> {
+    let mut statements: Vec<String> = Vec::new();
+    let mut current: Option<String> = None;
+    let mut in_block = false;
+
+    for raw in source.replace("\r\n", "\n").lines() {
+        let trimmed = raw.trim();
+        if in_block {
+            if let Some(cur) = current.as_mut() {
+                cur.push('\n');
+                cur.push_str(raw);
+            }
+            if trimmed == ":}" {
+                in_block = false;
+                if let Some(cur) = current.take() {
+                    statements.push(cur);
+                }
+            }
+            continue;
+        }
+        if trimmed.is_empty() || trimmed.starts_with("--") {
+            continue;
+        }
+        if trimmed.starts_with(":{") {
+            if let Some(cur) = current.take() {
+                statements.push(cur);
+            }
+            current = Some(raw.to_string());
+            in_block = true;
+            continue;
+        }
+        let indented = raw.starts_with(' ') || raw.starts_with('\t');
+        if indented {
+            if let Some(cur) = current.as_mut() {
+                cur.push('\n');
+                cur.push_str(raw);
+            } else {
+                current = Some(raw.to_string());
+            }
+        } else {
+            if let Some(cur) = current.take() {
+                statements.push(cur);
+            }
+            current = Some(raw.to_string());
+        }
+    }
+    if let Some(cur) = current {
+        statements.push(cur);
+    }
+    statements
+        .into_iter()
+        .map(|statement| statement.trim_end().to_string())
+        .filter(|statement| !statement.trim().is_empty())
+        .collect()
 }
 
 pub fn wrap_code(code: &str) -> String {
@@ -106,8 +151,55 @@ mod tests {
                 "{name} binding missing"
             );
         }
-        // 11 statements: import, tidal, d1..d8, hush — one prompt echo each.
         assert_eq!(prelude_prompts(), 11);
         assert!(!PRELUDE.contains(":{"));
+    }
+
+    #[test]
+    fn splits_file_into_statements() {
+        let source =
+            "-- header\n\nd1 $ s \"bd\"\nd2 $ s \"sn\" -- tail\n\n-- middle\nd3 $ s \"hh\"\n";
+        assert_eq!(
+            split_statements(source),
+            vec![
+                "d1 $ s \"bd\"".to_string(),
+                "d2 $ s \"sn\" -- tail".to_string(),
+                "d3 $ s \"hh\"".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn keeps_indented_continuations() {
+        let source = "d1 $ s \"bd\"\n   # gain 0.8\n   # pan 0.2\nd2 $ s \"sn\"\n";
+        assert_eq!(
+            split_statements(source),
+            vec![
+                "d1 $ s \"bd\"\n   # gain 0.8\n   # pan 0.2".to_string(),
+                "d2 $ s \"sn\"".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn keeps_explicit_blocks_whole() {
+        let source = ":{\nlet x = 1\n    y = 2\n:}\nd1 $ s \"bd\"\n";
+        assert_eq!(
+            split_statements(source),
+            vec![
+                ":{\nlet x = 1\n    y = 2\n:}".to_string(),
+                "d1 $ s \"bd\"".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn handles_crlf_and_empty_input() {
+        assert_eq!(
+            split_statements("d1 $ s \"bd\"\r\nd2 $ s \"sn\"\r\n"),
+            vec!["d1 $ s \"bd\"".to_string(), "d2 $ s \"sn\"".to_string()]
+        );
+        assert!(split_statements("").is_empty());
+        assert!(split_statements("\n-- only comments\n").is_empty());
     }
 }

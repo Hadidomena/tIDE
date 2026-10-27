@@ -1,7 +1,7 @@
 pub mod process;
 
 use crate::engine::{Engine, EngineLauncher, EngineState};
-use process::{PRELUDE, PROMPT_SETUP, is_ready, prelude_prompts, wrap_code};
+use process::{PRELUDE, PROMPT_SETUP, is_ready, prelude_prompts, split_statements, wrap_code};
 use serde::Serialize;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -160,6 +160,13 @@ impl Session {
         self.send(Cmd::Eval(code))
     }
 
+    pub fn eval_many(&self, statements: Vec<String>) -> Result<usize, String> {
+        for statement in &statements {
+            self.send(Cmd::Eval(statement.clone()))?;
+        }
+        Ok(statements.len())
+    }
+
     pub fn restart(&self, engine: Option<Engine>, data_dir: PathBuf) -> Result<(), String> {
         *self.state.lock().unwrap() = SessionState::Starting;
         if let Err(e) = self.send(Cmd::Restart(engine, data_dir)) {
@@ -234,6 +241,18 @@ pub fn session_eval(code: String, session: State<'_, Session>) -> Result<Session
     }
     session.eval(code)?;
     Ok(session.state())
+}
+
+#[tauri::command]
+pub fn session_eval_file(code: String, session: State<'_, Session>) -> Result<usize, String> {
+    if session.state() != SessionState::Ready {
+        return Err(format!("session not ready (state: {:?})", session.state()));
+    }
+    let statements = split_statements(&code);
+    if statements.is_empty() {
+        return Err("nothing to evaluate".to_string());
+    }
+    session.eval_many(statements)
 }
 
 #[tauri::command]
@@ -788,6 +807,47 @@ mod tests {
         sess.stop();
         assert!(wait_for_state(&sess, SessionState::Stopped, 10));
         drop(sess);
+    }
+
+    #[test]
+    #[ignore = "requires working ghci + tidal (headless; run-file queueing)"]
+    fn run_file_replays_in_order() {
+        let (sess, mut rx) = Session::for_test();
+        sess.start(Engine::Headless, std::env::temp_dir()).unwrap();
+        assert!(
+            wait_for_state(&sess, SessionState::Ready, 90),
+            "session startup timed out"
+        );
+
+        let source = "-- demo\nlet aa = 40\nlet bb = 2\n";
+        assert_eq!(sess.eval_many(split_statements(source)).unwrap(), 2);
+
+        let mut busy = 0;
+        let mut out = String::new();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(SessionEvent::State {
+                    state: SessionState::Busy,
+                }) => busy += 1,
+                Ok(SessionEvent::State {
+                    state: SessionState::Ready,
+                }) if busy >= 2 => break,
+                Ok(SessionEvent::Output { text, .. }) => out.push_str(&text),
+                _ => {}
+            }
+        }
+        assert_eq!(
+            busy, 2,
+            "expected two queued evals to run; output so far: {out}"
+        );
+
+        let out = run_eval(&sess, &mut rx, "aa + bb").unwrap();
+        assert!(
+            out.contains("42"),
+            "queued file statements did not run in order: {out}"
+        );
+        sess.stop();
     }
 
     #[test]
