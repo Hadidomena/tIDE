@@ -113,6 +113,7 @@
 					tidalSupport,
 					synthwaveTheme,
 					syntaxHighlighting(synthwaveHighlight),
+					EditorView.lineWrapping,
 					errorLineField,
 					Prec.high(
 						keymap.of([
