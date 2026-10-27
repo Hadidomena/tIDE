@@ -427,15 +427,15 @@ d1 $ s "bd sn:1 ~ hh"
 	}
 
 	.stderr {
-		color: #e5484d;
+		color: #c62828;
 	}
 
 	.engine {
-		color: #6f8fd6;
+		color: #3f63b8;
 	}
 
 	.system {
-		color: #e8a33d;
+		color: #9a5b00;
 		font-style: italic;
 	}
 
@@ -534,7 +534,7 @@ d1 $ s "bd sn:1 ~ hh"
 	}
 
 	.muted {
-		opacity: 0.65;
+		color: #4c4c56;
 	}
 
 	.hint {
@@ -543,17 +543,16 @@ d1 $ s "bd sn:1 ~ hh"
 		padding: 0;
 		border: none;
 		background: none;
-		color: inherit;
+		color: #3f3f48;
 		font: inherit;
 		font-size: 0.68rem;
 		text-align: left;
-		opacity: 0.8;
 		text-decoration: underline dotted;
 		cursor: pointer;
 	}
 
 	.error {
-		color: #e5484d;
+		color: #c62828;
 	}
 
 	@media (prefers-color-scheme: dark) {
@@ -561,8 +560,21 @@ d1 $ s "bd sn:1 ~ hh"
 			background-color: #1e1e24;
 			color: #eaeaea;
 		}
-		.stderr {
+		.stderr,
+		.error {
 			color: #ff6369;
+		}
+		.engine {
+			color: #8fb0ff;
+		}
+		.system {
+			color: #e8a33d;
+		}
+		.muted {
+			color: #b9b9c4;
+		}
+		.hint {
+			color: #d3d3dc;
 		}
 	}
 </style>

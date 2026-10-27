@@ -873,6 +873,14 @@ mod tests {
             "expected hush to be bound by the prelude, got: {out}"
         );
 
+        for (name, kind) in [("setcps", "Pattern Double"), ("solo", "Sound.Tidal.ID.ID")] {
+            let out = run_eval(&sess, &mut rx, &format!(":t {name}")).unwrap();
+            assert!(
+                out.contains(&format!("{name} ::")),
+                "expected {name} from Sound.Tidal.Boot ({kind}), got: {out}"
+            );
+        }
+
         sess.stop();
         assert!(wait_for_state(&sess, SessionState::Stopped, 15));
     }

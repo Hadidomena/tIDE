@@ -124,4 +124,35 @@
 	:global(.editor-host .cm-scroller) {
 		font-family: 'JetBrains Mono', Menlo, Monaco, Consolas, monospace;
 	}
+
+	:global(.cm-tooltip.cm-tooltip-autocomplete) {
+		background: #ffffff;
+		color: #1e1e24;
+		border: 1px solid #9a9aa2;
+	}
+
+	:global(.cm-tooltip-autocomplete > ul > li[aria-selected]) {
+		background: #dbe6ff;
+		color: #1e1e24;
+	}
+
+	:global(.cm-completionDetail) {
+		color: #4a4a52;
+		font-style: italic;
+	}
+
+	@media (prefers-color-scheme: dark) {
+		:global(.cm-tooltip.cm-tooltip-autocomplete) {
+			background: #2a2a32;
+			color: #f1f1f4;
+			border-color: #55555f;
+		}
+		:global(.cm-tooltip-autocomplete > ul > li[aria-selected]) {
+			background: #3a4a6a;
+			color: #ffffff;
+		}
+		:global(.cm-completionDetail) {
+			color: #c8c8d0;
+		}
+	}
 </style>

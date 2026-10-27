@@ -6,16 +6,9 @@ pub const PROMPT_SETUP: &str = ":set prompt \"tIDE> \"\n\
 :set -XExtendedDefaultRules\n";
 
 pub const PRELUDE: &str = "import Sound.Tidal.Context\n\
-tidal <- startTidal superdirtTarget defaultConfig\n\
-let d1 = streamReplace tidal 1\n\
-let d2 = streamReplace tidal 2\n\
-let d3 = streamReplace tidal 3\n\
-let d4 = streamReplace tidal 4\n\
-let d5 = streamReplace tidal 5\n\
-let d6 = streamReplace tidal 6\n\
-let d7 = streamReplace tidal 7\n\
-let d8 = streamReplace tidal 8\n\
-let hush = streamHush tidal\n";
+tidalInst <- startTidal superdirtTarget defaultConfig\n\
+import Sound.Tidal.Boot\n\
+instance Tidally where tidal = tidalInst\n";
 
 pub fn prelude_prompts() -> usize {
     PRELUDE.matches('\n').count()
@@ -144,14 +137,10 @@ mod tests {
     #[test]
     fn prelude_is_statement_per_line() {
         assert!(PRELUDE.starts_with("import Sound.Tidal.Context\n"));
-        assert!(PRELUDE.contains("tidal <- startTidal superdirtTarget defaultConfig\n"));
-        for name in ["d1", "d8", "hush"] {
-            assert!(
-                PRELUDE.contains(&format!("let {name} = ")),
-                "{name} binding missing"
-            );
-        }
-        assert_eq!(prelude_prompts(), 11);
+        assert!(PRELUDE.contains("tidalInst <- startTidal superdirtTarget defaultConfig\n"));
+        assert!(PRELUDE.contains("import Sound.Tidal.Boot\n"));
+        assert!(PRELUDE.contains("instance Tidally where tidal = tidalInst\n"));
+        assert_eq!(prelude_prompts(), 4);
         assert!(!PRELUDE.contains(":{"));
     }
 
