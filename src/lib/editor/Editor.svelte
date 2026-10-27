@@ -41,8 +41,8 @@
 
 	const synthwaveTheme = EditorView.theme(
 		{
-			'&': { backgroundColor: '#000000', color: '#ffffff' },
-			'.cm-content': { caretColor: '#fede5d' },
+			'&': { backgroundColor: '#000000', color: '#36f9f6' },
+			'.cm-content': { color: '#36f9f6', caretColor: '#fede5d' },
 			'.cm-cursor, .cm-dropCursor': { borderLeftColor: '#fede5d' },
 			'.cm-selectionBackground, .cm-content ::selection': {
 				backgroundColor: '#001069'
@@ -60,8 +60,8 @@
 		{ tag: tags.comment, color: '#848bbd', fontStyle: 'italic' },
 		{ tag: [tags.keyword, tags.operatorKeyword], color: '#fede5d' },
 		{ tag: [tags.operator, tags.punctuation, tags.bracket], color: '#fede5d' },
-		{ tag: tags.number, color: '#f97e72' },
-		{ tag: tags.string, color: '#ff8b39' },
+		{ tag: tags.number, color: '#ff5252' },
+		{ tag: tags.string, color: '#28b881' },
 		{ tag: tags.typeName, color: '#fe4450' },
 		{ tag: tags.variableName, color: '#f73232' },
 		{ tag: tags.function(tags.variableName), color: '#36f9f6' },
@@ -183,7 +183,7 @@
 		height: 100%;
 		font-size: 14px;
 		background: var(--sw-bg);
-		color: var(--sw-text);
+		color: var(--sw-blue);
 	}
 
 	:global(.editor-host .cm-gutters) {
