@@ -60,6 +60,7 @@ Open the **Diagnostics** pane in the app to see exactly what is detected and wha
 - `d1 $ s "chipbass" # note "c2 eb2 g2 bb2" # legato 0.8`
 
 ### Boot Aliases
+
 The full set of Tidal boot aliases is available: `setcps`, `setbpm`, `getcps`, `getbpm`, `solo`,
 `unsolo`, `mute`, `unmute`, `once`, `first`, `asap`, `all`, `nudgeAll`, `resetCycles`, `hush`,
 `panic`, and `d1`…`d16` (each `dN` uses orbit N−1).

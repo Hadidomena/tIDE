@@ -136,6 +136,12 @@
 		color: #1e1e24;
 	}
 
+	:global(.cm-tooltip.cm-completionInfo) {
+		background: #ffffff;
+		color: #1e1e24;
+		border: 1px solid #9a9aa2;
+	}
+
 	:global(.cm-completionDetail) {
 		color: #4a4a52;
 		font-style: italic;
@@ -143,6 +149,11 @@
 
 	@media (prefers-color-scheme: dark) {
 		:global(.cm-tooltip.cm-tooltip-autocomplete) {
+			background: #2a2a32;
+			color: #f1f1f4;
+			border-color: #55555f;
+		}
+		:global(.cm-tooltip.cm-completionInfo) {
 			background: #2a2a32;
 			color: #f1f1f4;
 			border-color: #55555f;
