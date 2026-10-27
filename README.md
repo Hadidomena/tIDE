@@ -50,6 +50,8 @@ In the window: `Cmd/Ctrl+Enter` evaluates the current line or selection, `Cmd/Ct
 hush button) silences all patterns. The engine is selected in Diagnostics: `auto` (SuperDirt when
 detected, otherwise headless), or explicitly `superdirt` / `headless`.
 
+Built-in additional instruments (no samples needed): `chip`, `chipbass`, `chipled`, `chipnoise` —
+for example `d1 $ s "chipbass" # note "c2 eb2 g2 bb2" # legato 0.8`.
 Useful scripts: `npm run lint` (ESLint), `npm run format` (Prettier), `npm run check`
 (svelte-check), and `cd src-tauri && cargo test` / `cargo clippy --all-targets -- -D warnings`.
 
