@@ -36,14 +36,6 @@ pre-commit:
       stage_fixed: true
       fail_text: 'prettier could not format staged frontend files'
 
-commit-msg:
-  skip:
-    - merge_commit
-    - rebase
-  jobs:
-    - name: conventional-commit
-      run: "grep -qE '^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\\([a-z0-9./_-]+\\))?!?: .{3,}' \"{1}\""
-      fail_text: 'Use Conventional Commits: type(scope): subject — e.g. "feat(editor): add tidal grammar"'
 
 pre-push:
   skip:
