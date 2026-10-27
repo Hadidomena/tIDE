@@ -62,7 +62,8 @@ Open the **Diagnostics** pane in the app to see exactly what is detected and wha
 
 The **logs** panel (GHCi + engine output) is hidden by default — toggle it with the `logs` button.
 Audio input/output devices can be selected in **Diagnostics** (the list comes from SuperCollider
-itself). Changing them applies after restarting the session; an input device is optional and
+itself). Changing them applies after restarting the session; if the selected device cannot be
+opened, the engine falls back to the system defaults and says so in the logs; an input device is optional and
 disabled by default (avoids sample-rate mismatches with a 16 kHz mic).
 
 The full set of Tidal boot aliases is available: `setcps`, `setbpm`, `getcps`, `getbpm`, `solo`,

@@ -23,7 +23,8 @@ export const diagnostics = $state({
 	cachedStatus: null as ToolchainStatus | null,
 	detecting: false,
 	error: '',
-	devices: [] as string[],
+	inputDevices: [] as string[],
+	outputDevices: [] as string[],
 	devicesLoading: false,
 	inputDevice: '',
 	outputDevice: ''
@@ -76,7 +77,9 @@ export async function loadDevices() {
 	diagnostics.devicesLoading = true;
 	diagnostics.error = '';
 	try {
-		diagnostics.devices = await invoke<string[]>('audio_devices');
+		const list = await invoke<{ inputs: string[]; outputs: string[] }>('audio_devices');
+		diagnostics.inputDevices = list.inputs;
+		diagnostics.outputDevices = list.outputs;
 	} catch (e) {
 		diagnostics.error = String(e);
 	} finally {

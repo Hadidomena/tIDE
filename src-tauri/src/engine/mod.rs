@@ -222,7 +222,34 @@ fn start_engine(
             Ok(None)
         }
         Engine::SuperDirt => {
-            start_superdirt(data_dir, sclang_override, devices, rx, evt, status).map(Some)
+            let custom_devices = devices.input.is_some() || devices.output.is_some();
+            match start_superdirt(data_dir, sclang_override.clone(), devices, rx, evt, status) {
+                Ok(running) => Ok(Some(running)),
+                Err(reason) if custom_devices => {
+                    emit_output(
+                        evt,
+                        "tIDE: selected audio device failed — retrying with system defaults\n"
+                            .to_string(),
+                    );
+                    match start_superdirt(
+                        data_dir,
+                        sclang_override,
+                        AudioDevices::default(),
+                        rx,
+                        evt,
+                        status,
+                    ) {
+                        Ok(running) => Ok(Some(running)),
+                        Err(retry) => fail(
+                            evt,
+                            status,
+                            format!("{reason}; retry with system defaults also failed: {retry}"),
+                        )
+                        .map(Some),
+                    }
+                }
+                Err(reason) => fail(evt, status, reason).map(Some),
+            }
         }
     }
 }
@@ -248,11 +275,7 @@ fn start_superdirt(
 ) -> Result<Running, String> {
     let engine_dir = data_dir.join("engine");
     if let Err(e) = std::fs::create_dir_all(&engine_dir) {
-        return fail(
-            evt,
-            status,
-            format!("cannot create {}: {e}", engine_dir.display()),
-        );
+        return Err(format!("cannot create {}: {e}", engine_dir.display()));
     }
     let marker = engine_dir.join("ready.txt");
     let _ = std::fs::remove_file(&marker);
@@ -262,7 +285,7 @@ fn start_superdirt(
         &script,
         render_boot_script(&marker, samples.as_deref(), &devices),
     ) {
-        return fail(evt, status, format!("cannot write boot script: {e}"));
+        return Err(format!("cannot write boot script: {e}"));
     }
 
     if port_held(OSC_PORT) {
@@ -278,21 +301,15 @@ fn start_superdirt(
             }
         }
         if port_held(OSC_PORT) {
-            return fail(
-                evt,
-                status,
-                format!(
-                    "OSC port {OSC_PORT} is already in use — another sclang/SuperCollider is running. \
-                     Quit it (`pkill sclang`) and restart the session, or use the headless engine."
-                ),
-            );
+            return Err(format!(
+                "OSC port {OSC_PORT} is already in use — another sclang/SuperCollider is running. \
+                 Quit it (`pkill sclang`) and restart the session, or use the headless engine."
+            ));
         }
     }
 
     let Some(sclang) = crate::toolchain::find_sclang(sclang_override.as_deref()) else {
-        return fail(
-            evt,
-            status,
+        return Err(
             "sclang not found — install SuperCollider or set a sclang path override".to_string(),
         );
     };
@@ -311,11 +328,7 @@ fn start_superdirt(
     let spawned = match command.spawn() {
         Ok(child) => child,
         Err(e) => {
-            return fail(
-                evt,
-                status,
-                format!("cannot spawn {}: {e}", sclang.display()),
-            );
+            return Err(format!("cannot spawn {}: {e}", sclang.display()));
         }
     };
 
@@ -360,38 +373,30 @@ fn start_superdirt(
                 }
             } else if let Some(reason) = content.strip_prefix("failed:") {
                 kill_group(&child);
-                return fail(
-                    evt,
-                    status,
-                    format!("boot script failed: {}", reason.trim()),
-                );
+                return Err(format!("boot script failed: {}", reason.trim()));
             }
         }
         if let Some(detail) = exited(&child) {
             kill_group(&child);
-            return fail(evt, status, detail);
+            return Err(detail);
         }
         match rx.try_recv() {
             Ok(Cmd::Stop) => {
                 kill_group(&child);
-                return fail(evt, status, "stopped during startup".to_string());
+                return Err("stopped during startup".to_string());
             }
             Err(TryRecvError::Disconnected) => {
                 kill_group(&child);
-                return fail(evt, status, "app exit during startup".to_string());
+                return Err("app exit during startup".to_string());
             }
             _ => {}
         }
         if Instant::now() >= deadline {
             kill_group(&child);
-            return fail(
-                evt,
-                status,
-                format!(
-                    "no readiness marker after {}s — is the audio device available? (see engine output)",
-                    READY_TIMEOUT.as_secs()
-                ),
-            );
+            return Err(format!(
+                "no readiness marker after {}s — is the audio device available? (see engine output)",
+                READY_TIMEOUT.as_secs()
+            ));
         }
         thread::sleep(POLL_INTERVAL);
     }

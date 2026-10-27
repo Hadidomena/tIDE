@@ -230,48 +230,55 @@ pub fn find_sclang(override_path: Option<&str>) -> Option<PathBuf> {
     locate(override_path, "sclang", &sclang_dirs(&home))
 }
 
-/// ghci discovery for the session supervisor. A GUI-launched app (Finder/installer build)
-/// gets only `/usr/bin:/bin:…` as PATH, so the shell's ghcup shim is invisible — the
-/// explicit `~/.ghcup/bin` fallback is what makes the packaged app work at all.
 pub fn find_ghci() -> Option<PathBuf> {
     let home = home_dir();
     locate(None, "ghci", &ghc_dirs(&home))
 }
 
-/// Device names as SuperCollider reports them (input and output devices share one list;
-/// `ServerOptions.inDevice`/`outDevice` take these exact strings).
-pub fn list_audio_devices() -> Result<Vec<String>, String> {
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AudioDeviceList {
+    pub inputs: Vec<String>,
+    pub outputs: Vec<String>,
+}
+
+pub fn list_audio_devices() -> Result<AudioDeviceList, String> {
     let sclang = find_sclang(None).ok_or("sclang not found — install SuperCollider")?;
     let script = std::env::temp_dir().join(format!("tide-devices-{}.scd", std::process::id()));
     std::fs::write(
         &script,
-        "ServerOptions.devices.do { |d| (\"TIDE-DEVICE \" ++ d).postln }; 0.exit;\n",
+        "ServerOptions.inDevices.do { |d| (\"TIDE-IN \" ++ d).postln }; \
+         ServerOptions.outDevices.do { |d| (\"TIDE-OUT \" ++ d).postln }; 0.exit;\n",
     )
     .map_err(|e| format!("cannot write device probe: {e}"))?;
     let script_arg = script.to_string_lossy().to_string();
     let outcome = run(&sclang, &[&script_arg], Duration::from_secs(30));
     let _ = std::fs::remove_file(&script);
     let outcome = outcome?;
-    let devices: Vec<String> = outcome
-        .stdout
-        .lines()
-        .filter_map(|line| line.trim().strip_prefix("TIDE-DEVICE ").map(str::to_string))
-        .collect();
-    if devices.is_empty() {
+    let mut list = AudioDeviceList {
+        inputs: Vec::new(),
+        outputs: Vec::new(),
+    };
+    for line in outcome.stdout.lines() {
+        let line = line.trim();
+        if let Some(name) = line.strip_prefix("TIDE-IN ") {
+            list.inputs.push(name.to_string());
+        } else if let Some(name) = line.strip_prefix("TIDE-OUT ") {
+            list.outputs.push(name.to_string());
+        }
+    }
+    if list.inputs.is_empty() && list.outputs.is_empty() {
         return Err("SuperCollider reported no audio devices".to_string());
     }
-    Ok(devices)
+    Ok(list)
 }
 
 #[tauri::command]
-pub async fn audio_devices() -> Result<Vec<String>, String> {
+pub async fn audio_devices() -> Result<AudioDeviceList, String> {
     tauri::async_runtime::spawn_blocking(list_audio_devices)
         .await
         .map_err(|e| format!("audio_devices failed: {e}"))?
 }
 
-/// Dirt-Samples root (one directory per sample group). The engine boot script feeds this to
-/// `~dirt.loadSoundFiles` — SuperDirt's `start` does NOT load samples itself.
 pub fn find_dirt_samples() -> Option<PathBuf> {
     let dir = quark_root(&home_dir()).join("Dirt-Samples");
     dir.is_dir().then_some(dir)
@@ -646,8 +653,9 @@ mod tests {
     #[ignore = "requires SuperCollider (sclang) — enumerates audio devices (~3 s)"]
     fn lists_audio_devices() {
         let devices = list_audio_devices().unwrap();
-        println!("{devices:?}");
-        assert!(!devices.is_empty());
+        println!("inputs: {:?}", devices.inputs);
+        println!("outputs: {:?}", devices.outputs);
+        assert!(!devices.outputs.is_empty());
     }
 
     #[test]

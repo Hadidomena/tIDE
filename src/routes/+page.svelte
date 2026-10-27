@@ -55,7 +55,12 @@ d1 $ s "bd sn:1 ~ hh"
 	});
 
 	$effect(() => {
-		if (diagnostics.open && diagnostics.devices.length === 0 && !diagnostics.devicesLoading) {
+		if (
+			diagnostics.open &&
+			diagnostics.inputDevices.length === 0 &&
+			diagnostics.outputDevices.length === 0 &&
+			!diagnostics.devicesLoading
+		) {
 			void loadDevices();
 		}
 	});
@@ -280,7 +285,7 @@ d1 $ s "bd sn:1 ~ hh"
 						onchange={(e) => void setInputDevice(e.currentTarget.value)}
 					>
 						<option value="">system default (off)</option>
-						{#each diagnostics.devices as device (device)}
+						{#each diagnostics.inputDevices as device (device)}
 							<option value={device}>{device}</option>
 						{/each}
 					</select>
@@ -292,7 +297,7 @@ d1 $ s "bd sn:1 ~ hh"
 						onchange={(e) => void setOutputDevice(e.currentTarget.value)}
 					>
 						<option value="">system default</option>
-						{#each diagnostics.devices as device (device)}
+						{#each diagnostics.outputDevices as device (device)}
 							<option value={device}>{device}</option>
 						{/each}
 					</select>
