@@ -31,17 +31,30 @@ and pattern analysis land in later milestones.
 Open the **Diagnostics** pane in the app to see exactly what is detected and what is yet to install.
 
 ## Keybinds
-   - `Cmd/Ctrl+Enter` evaluates current line or selection
-   - `Cmd/Ctrl+Shift+Enter` or the **run file** button replays the whole file statement by statement
-   - `Cmd/Ctrl+.` or the hush button silences all patterns
+
+| Shortcut                                 | Action                                     |
+| ---------------------------------------- | ------------------------------------------ |
+| `Cmd/Ctrl+Enter`                         | evaluate the current line or selection     |
+| `Ctrl+Enter` (macOS alias)               | same as above                              |
+| `Cmd/Ctrl+Shift+Enter`                   | run the whole file, statement by statement |
+| `Cmd/Ctrl+.`                             | hush — silence all running patterns        |
+| `Cmd/Ctrl+S`                             | save                                       |
+| `Cmd/Ctrl+Shift+S`                       | save as                                    |
+| `Cmd/Ctrl+O`                             | open a file                                |
+| `Tab` / `Shift+Tab`                      | accept autocomplete (or indent) / outdent  |
+| `Enter` in the console row               | evaluate the typed line                    |
+| `Cmd/Ctrl+Z`, `Shift+Cmd/Ctrl+Z`         | undo / redo (CodeMirror defaults)          |
+| `Cmd/Ctrl+F`, `Cmd/Ctrl+A`, `Cmd/Ctrl+D` | find, select all, select next occurrence   |
 
 ## Additional instruments
+
 - `chip`
 - `chipbass`
 - `chipled`
 - `chipnoise`
 
 **Example of usage:**
+
 - `d1 $ s "chipbass" # note "c2 eb2 g2 bb2" # legato 0.8`
 
 ## Quickstart (development)
