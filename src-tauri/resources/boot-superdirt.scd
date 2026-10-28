@@ -51,6 +51,8 @@ s.waitForBoot(
 		{
 			chipSynths.value;
 			~tideDirt = SuperDirt(2, s);
+			~tideDirt.soundLibrary.fileExtensions =
+				#["wav", "aif", "aiff", "aifc", "flac", "mp3", "ogg", "caf"];
 			if (samples.size > 0) {
 				"tIDE: loading samples from ".postln;
 				samples.postln;

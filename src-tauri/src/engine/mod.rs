@@ -579,6 +579,9 @@ mod tests {
         assert!(script.contains("var outDevice = \"Speakers\";"));
         assert!(script.contains("s.options.outDevice = outDevice;"));
         assert!(script.contains("loadSoundFiles"));
+        assert!(script.contains("soundLibrary.fileExtensions"));
+        assert!(script.contains("\"flac\""));
+        assert!(script.contains("\"mp3\""));
         assert!(script.contains("start(57120, 0 ! 16)"));
         assert!(script.contains("SynthDef(\\chip"));
         assert!(script.contains("SynthDef(\\chipbass"));
