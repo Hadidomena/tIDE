@@ -52,12 +52,22 @@ pub fn export_stop(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn export_finalize(
+pub async fn export_finalize(
     wav_path: String,
     target: String,
     delete_source: Option<bool>,
+    app: AppHandle,
 ) -> Result<ExportStatus, String> {
-    finalize_in(&wav_path, &target, delete_source.unwrap_or(false))
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app data dir unavailable: {e}"))?;
+    let delete_source = delete_source.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || {
+        finalize_in(&data_dir, &wav_path, &target, delete_source)
+    })
+    .await
+    .map_err(|e| format!("export finalize job failed: {e}"))?
 }
 
 pub fn start_in(
@@ -101,10 +111,23 @@ pub fn stop_in(data_dir: &Path) -> Result<(), String> {
 }
 
 pub fn finalize_in(
+    data_dir: &Path,
     wav_path: &str,
     target: &str,
     delete_source: bool,
 ) -> Result<ExportStatus, String> {
+    let path = Path::new(wav_path);
+    if !path.is_file() {
+        return Err(format!("recording not found: {wav_path}"));
+    }
+    let exports = exports_dir(data_dir);
+    if !is_within(&exports, path) {
+        return Err(format!(
+            "refusing to finalize a file outside {}: {wav_path}",
+            exports.display()
+        ));
+    }
+
     let target = target.to_ascii_lowercase();
     let decoded = wait_for_wav(wav_path)?;
     let duration_secs = decoded.duration_ms() as f64 / 1000.0;
@@ -118,10 +141,10 @@ pub fn finalize_in(
         });
     }
 
-    let out = Path::new(wav_path).with_extension("flac");
+    let out = path.with_extension("flac");
     let _ = dsp::encode_flac(&out, &decoded, 16)?;
-    if delete_source {
-        let _ = std::fs::remove_file(wav_path);
+    if delete_source && out != path {
+        let _ = std::fs::remove_file(path);
     }
     Ok(ExportStatus {
         recording: false,
@@ -129,6 +152,13 @@ pub fn finalize_in(
         format: "flac".to_string(),
         duration_secs,
     })
+}
+
+fn is_within(dir: &Path, path: &Path) -> bool {
+    let (Ok(dir), Ok(path)) = (dir.canonicalize(), path.canonicalize()) else {
+        return false;
+    };
+    path.starts_with(dir)
 }
 
 fn wait_for_wav(wav_path: &str) -> Result<dsp::Decoded, String> {
@@ -300,13 +330,19 @@ mod tests {
         dsp::encode_wav(path, &decoded, 16).unwrap();
     }
 
+    fn exports_with_wav(tag: &str) -> (PathBuf, PathBuf) {
+        let data = temp_dir(tag);
+        let exports = exports_dir(&data);
+        std::fs::create_dir_all(&exports).unwrap();
+        let wav = exports.join("take.wav");
+        write_test_wav(&wav);
+        (data, wav)
+    }
+
     #[test]
     fn finalize_flac_converts_and_removes_source() {
-        let data = temp_dir("flac");
-        let wav = data.join("take.wav");
-        write_test_wav(&wav);
-
-        let status = finalize_in(wav.to_str().unwrap(), "flac", true).unwrap();
+        let (data, wav) = exports_with_wav("flac");
+        let status = finalize_in(&data, wav.to_str().unwrap(), "flac", true).unwrap();
         assert_eq!(status.format, "flac");
         assert!(status.path.ends_with(".flac"));
         assert!(Path::new(&status.path).is_file(), "flac output missing");
@@ -320,11 +356,8 @@ mod tests {
 
     #[test]
     fn finalize_wav_keeps_the_file() {
-        let data = temp_dir("keepwav");
-        let wav = data.join("take.wav");
-        write_test_wav(&wav);
-
-        let status = finalize_in(wav.to_str().unwrap(), "wav", true).unwrap();
+        let (data, wav) = exports_with_wav("keepwav");
+        let status = finalize_in(&data, wav.to_str().unwrap(), "wav", true).unwrap();
         assert_eq!(status.format, "wav");
         assert_eq!(status.path, wav.display().to_string());
         assert!(wav.is_file(), "wav must be kept for a wav target");
@@ -332,7 +365,33 @@ mod tests {
     }
 
     #[test]
+    fn finalize_rejects_paths_outside_exports() {
+        let data = temp_dir("outside");
+        let outside = data.join("not-a-recording.wav");
+        write_test_wav(&outside);
+
+        assert!(finalize_in(&data, outside.to_str().unwrap(), "flac", true).is_err());
+        assert!(outside.is_file(), "must not touch files outside exports/");
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn finalize_does_not_delete_a_flac_input() {
+        let (data, wav) = exports_with_wav("flacinput");
+        let flac = wav.with_extension("flac");
+        let decoded = dsp::decode(&wav).unwrap();
+        dsp::encode_flac(&flac, &decoded, 16).unwrap();
+
+        let status = finalize_in(&data, flac.to_str().unwrap(), "flac", true).unwrap();
+        assert_eq!(status.path, flac.display().to_string());
+        assert!(flac.is_file(), "must not delete its own output");
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
     fn finalize_missing_file_errors() {
-        assert!(finalize_in("/nonexistent/tide-take.wav", "flac", false).is_err());
+        let data = temp_dir("missing");
+        assert!(finalize_in(&data, "/nonexistent/tide-take.wav", "flac", false).is_err());
+        let _ = std::fs::remove_dir_all(&data);
     }
 }
