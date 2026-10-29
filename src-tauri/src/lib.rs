@@ -7,6 +7,7 @@ pub mod toolchain;
 
 use tauri_plugin_sql::{Migration, MigrationKind};
 
+use library::transform::sample_transform;
 use project::{project_open, project_save};
 use session::{Session, session_eval, session_eval_file, session_restart, session_start};
 use toolchain::{audio_devices, toolchain_detect};
@@ -44,7 +45,8 @@ pub fn run() {
             project_open,
             project_save,
             toolchain_detect,
-            audio_devices
+            audio_devices,
+            sample_transform
         ])
         .build(tauri::generate_context!())
         .expect("error while building tIDE")

@@ -10,11 +10,14 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use symphonia::core::sample::Sample;
 
+use serde::{Deserialize, Serialize};
+
 use hound::{SampleFormat, WavSpec, WavWriter};
 
 pub type Result<T> = std::result::Result<T, String>;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Op {
     Reverse,
     Trim { start_ms: u32, end_ms: u32 },
@@ -23,7 +26,8 @@ pub enum Op {
     Fade { in_ms: u32, out_ms: u32 },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum NormalizeMode {
     Peak,
     Rms,
@@ -270,7 +274,6 @@ fn fade(decoded: &mut Decoded, in_ms: u32, out_ms: u32) {
     }
 }
 
-/// Encode interleaved f32 to a 16- or 24-bit integer WAV on disk.
 pub fn encode_wav(path: &Path, decoded: &Decoded, bits_per_sample: u16) -> Result<u64> {
     let spec = WavSpec {
         channels: decoded.channels.max(1),
@@ -364,7 +367,6 @@ mod tests {
 
     #[test]
     fn trim_slices_frames_by_milliseconds() {
-        // 10 frames at 1 kHz → 1 ms == 1 frame.
         let mut d = mono((0..10).map(|i| i as f32).collect(), 1000);
         apply(
             &mut d,
@@ -525,7 +527,6 @@ mod tests {
         assert_eq!(decoded.sample_rate, 48000);
         assert_eq!(decoded.channels, 2);
         assert_eq!(decoded.frames(), 3);
-        // 16-bit quantization — compare within two LSBs.
         for (got, want) in decoded.samples.iter().zip(original.samples.iter()) {
             assert!((got - want).abs() < 2.0 / 32768.0, "{got} != {want}");
         }
