@@ -17,6 +17,8 @@ const MARKER_PLACEHOLDER: &str = "__TIDE_MARKER__";
 const SAMPLES_PLACEHOLDER: &str = "__TIDE_SAMPLES__";
 const DERIVED_PLACEHOLDER: &str = "__TIDE_DERIVED__";
 const RELOAD_PLACEHOLDER: &str = "__TIDE_RELOAD__";
+const RECORD_PLACEHOLDER: &str = "__TIDE_RECORD__";
+const STOP_RECORD_PLACEHOLDER: &str = "__TIDE_STOPRECORD__";
 const IN_DEVICE_PLACEHOLDER: &str = "__TIDE_IN_DEVICE__";
 const OUT_DEVICE_PLACEHOLDER: &str = "__TIDE_OUT_DEVICE__";
 const BOOT_SCRIPT: &str = include_str!("../../resources/boot-superdirt.scd");
@@ -284,7 +286,11 @@ fn start_superdirt(
     let samples = crate::toolchain::find_dirt_samples();
     let derived = crate::library::transform::derived_dir(data_dir);
     let reload_flag = crate::library::transform::reload_flag_path(data_dir);
+    let record_flag = crate::export::record_flag_path(data_dir);
+    let stop_flag = crate::export::stop_flag_path(data_dir);
     let _ = std::fs::remove_file(&reload_flag);
+    let _ = std::fs::remove_file(&record_flag);
+    let _ = std::fs::remove_file(&stop_flag);
     let script = engine_dir.join("boot-superdirt.scd");
     if let Err(e) = std::fs::write(
         &script,
@@ -293,6 +299,8 @@ fn start_superdirt(
             samples.as_deref(),
             &derived,
             &reload_flag,
+            &record_flag,
+            &stop_flag,
             &devices,
         ),
     ) {
@@ -544,6 +552,8 @@ fn render_boot_script(
     samples: Option<&Path>,
     derived: &Path,
     reload_flag: &Path,
+    record_flag: &Path,
+    stop_flag: &Path,
     devices: &AudioDevices,
 ) -> String {
     let samples = samples
@@ -551,6 +561,8 @@ fn render_boot_script(
         .unwrap_or_default();
     let derived = escape_sc_string(&derived.display().to_string());
     let reload_flag = escape_sc_string(&reload_flag.display().to_string());
+    let record_flag = escape_sc_string(&record_flag.display().to_string());
+    let stop_flag = escape_sc_string(&stop_flag.display().to_string());
     let input = devices
         .input
         .as_deref()
@@ -569,6 +581,8 @@ fn render_boot_script(
         .replace(SAMPLES_PLACEHOLDER, &samples)
         .replace(DERIVED_PLACEHOLDER, &derived)
         .replace(RELOAD_PLACEHOLDER, &reload_flag)
+        .replace(RECORD_PLACEHOLDER, &record_flag)
+        .replace(STOP_RECORD_PLACEHOLDER, &stop_flag)
         .replace(IN_DEVICE_PLACEHOLDER, &input)
         .replace(OUT_DEVICE_PLACEHOLDER, &output)
 }
@@ -588,6 +602,8 @@ mod tests {
             Some(Path::new(r#"C:\Users\me\samples"#)),
             Path::new(r#"C:\Users\me\derived"#),
             Path::new(r#"C:\Users\me\reload.txt"#),
+            Path::new(r#"C:\Users\me\record.txt"#),
+            Path::new(r#"C:\Users\me\stoprecord.txt"#),
             &AudioDevices {
                 input: Some("Mic \"Pro\"".to_string()),
                 output: Some("Speakers".to_string()),
@@ -597,10 +613,14 @@ mod tests {
         assert!(!script.contains(SAMPLES_PLACEHOLDER));
         assert!(!script.contains(DERIVED_PLACEHOLDER));
         assert!(!script.contains(RELOAD_PLACEHOLDER));
+        assert!(!script.contains(RECORD_PLACEHOLDER));
+        assert!(!script.contains(STOP_RECORD_PLACEHOLDER));
         assert!(script.contains(r#""C:\\Users\\me\\\"tIDE\"\\ready.txt""#));
         assert!(script.contains(r#""C:\\Users\\me\\samples""#));
         assert!(script.contains(r#""C:\\Users\\me\\derived""#));
         assert!(script.contains(r#""C:\\Users\\me\\reload.txt""#));
+        assert!(script.contains(r#""C:\\Users\\me\\record.txt""#));
+        assert!(script.contains(r#""C:\\Users\\me\\stoprecord.txt""#));
         assert!(script.contains("SuperDirt(2, s)"));
         assert!(script.contains("var inDevice = \"Mic \\\"Pro\\\"\";"));
         assert!(script.contains("var outDevice = \"Speakers\";"));
@@ -619,17 +639,26 @@ mod tests {
         assert!(script.contains("loadSoundFiles(derived ++ \"/*\")"));
         assert!(script.contains("File.delete(reloadFlag)"));
         assert!(script.contains("samples reloaded"));
+        assert!(script.contains("File.exists(recordFlag)"));
+        assert!(script.contains("s.record(outPath, 0, 2, nil, duration)"));
+        assert!(script.contains("recSampleFormat"));
+        assert!(script.contains("File.exists(stopFlag)"));
+        assert!(script.contains("s.stopRecording"));
 
         let headless_script = render_boot_script(
             Path::new("/tmp/ready.txt"),
             None,
             Path::new("/tmp/derived"),
             Path::new("/tmp/reload.txt"),
+            Path::new("/tmp/record.txt"),
+            Path::new("/tmp/stoprecord.txt"),
             &AudioDevices::default(),
         );
         assert!(!headless_script.contains(SAMPLES_PLACEHOLDER));
         assert!(!headless_script.contains(DERIVED_PLACEHOLDER));
         assert!(!headless_script.contains(RELOAD_PLACEHOLDER));
+        assert!(!headless_script.contains(RECORD_PLACEHOLDER));
+        assert!(!headless_script.contains(STOP_RECORD_PLACEHOLDER));
         assert!(headless_script.contains("no Dirt-Samples directory configured"));
         assert!(headless_script.contains("var inDevice = \"\";"));
         assert!(headless_script.contains("var outDevice = \"\";"));
