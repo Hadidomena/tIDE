@@ -1,6 +1,8 @@
 (
 var marker = "__TIDE_MARKER__";
 var samples = "__TIDE_SAMPLES__";
+var derived = "__TIDE_DERIVED__";
+var reloadFlag = "__TIDE_RELOAD__";
 var inDevice = "__TIDE_IN_DEVICE__";
 var outDevice = "__TIDE_OUT_DEVICE__";
 var writeMarker = { |text|
@@ -60,7 +62,24 @@ s.waitForBoot(
 			} {
 				"tIDE: no Dirt-Samples directory configured -- patterns will not sound".postln;
 			};
+			if (derived.size > 0 and: { File.exists(derived) }) {
+				"tIDE: loading derived samples from ".postln;
+				derived.postln;
+				~tideDirt.loadSoundFiles(derived ++ "/*");
+			};
 			~tideDirt.start(57120, 0 ! 16);
+			if (derived.size > 0) {
+				fork {
+					loop {
+						1.wait;
+						if (File.exists(reloadFlag)) {
+							~tideDirt.loadSoundFiles(derived ++ "/*");
+							File.delete(reloadFlag);
+							"tIDE: samples reloaded".postln;
+						};
+					};
+				};
+			};
 			fork {
 				1.wait;
 				writeMarker.value("ready");
