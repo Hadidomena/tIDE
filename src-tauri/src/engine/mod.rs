@@ -15,6 +15,8 @@ const READY_TIMEOUT: Duration = Duration::from_secs(120);
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
 const MARKER_PLACEHOLDER: &str = "__TIDE_MARKER__";
 const SAMPLES_PLACEHOLDER: &str = "__TIDE_SAMPLES__";
+const DERIVED_PLACEHOLDER: &str = "__TIDE_DERIVED__";
+const RELOAD_PLACEHOLDER: &str = "__TIDE_RELOAD__";
 const IN_DEVICE_PLACEHOLDER: &str = "__TIDE_IN_DEVICE__";
 const OUT_DEVICE_PLACEHOLDER: &str = "__TIDE_OUT_DEVICE__";
 const BOOT_SCRIPT: &str = include_str!("../../resources/boot-superdirt.scd");
@@ -280,10 +282,19 @@ fn start_superdirt(
     let marker = engine_dir.join("ready.txt");
     let _ = std::fs::remove_file(&marker);
     let samples = crate::toolchain::find_dirt_samples();
+    let derived = crate::library::transform::derived_dir(data_dir);
+    let reload_flag = crate::library::transform::reload_flag_path(data_dir);
+    let _ = std::fs::remove_file(&reload_flag);
     let script = engine_dir.join("boot-superdirt.scd");
     if let Err(e) = std::fs::write(
         &script,
-        render_boot_script(&marker, samples.as_deref(), &devices),
+        render_boot_script(
+            &marker,
+            samples.as_deref(),
+            &derived,
+            &reload_flag,
+            &devices,
+        ),
     ) {
         return Err(format!("cannot write boot script: {e}"));
     }
@@ -528,10 +539,18 @@ fn port_held(port: u16) -> bool {
     }
 }
 
-fn render_boot_script(marker: &Path, samples: Option<&Path>, devices: &AudioDevices) -> String {
+fn render_boot_script(
+    marker: &Path,
+    samples: Option<&Path>,
+    derived: &Path,
+    reload_flag: &Path,
+    devices: &AudioDevices,
+) -> String {
     let samples = samples
         .map(|dir| escape_sc_string(&dir.display().to_string()))
         .unwrap_or_default();
+    let derived = escape_sc_string(&derived.display().to_string());
+    let reload_flag = escape_sc_string(&reload_flag.display().to_string());
     let input = devices
         .input
         .as_deref()
@@ -548,6 +567,8 @@ fn render_boot_script(marker: &Path, samples: Option<&Path>, devices: &AudioDevi
             &escape_sc_string(&marker.display().to_string()),
         )
         .replace(SAMPLES_PLACEHOLDER, &samples)
+        .replace(DERIVED_PLACEHOLDER, &derived)
+        .replace(RELOAD_PLACEHOLDER, &reload_flag)
         .replace(IN_DEVICE_PLACEHOLDER, &input)
         .replace(OUT_DEVICE_PLACEHOLDER, &output)
 }
@@ -565,6 +586,8 @@ mod tests {
         let script = render_boot_script(
             Path::new(r#"C:\Users\me\"tIDE"\ready.txt"#),
             Some(Path::new(r#"C:\Users\me\samples"#)),
+            Path::new(r#"C:\Users\me\derived"#),
+            Path::new(r#"C:\Users\me\reload.txt"#),
             &AudioDevices {
                 input: Some("Mic \"Pro\"".to_string()),
                 output: Some("Speakers".to_string()),
@@ -572,8 +595,12 @@ mod tests {
         );
         assert!(!script.contains(MARKER_PLACEHOLDER));
         assert!(!script.contains(SAMPLES_PLACEHOLDER));
+        assert!(!script.contains(DERIVED_PLACEHOLDER));
+        assert!(!script.contains(RELOAD_PLACEHOLDER));
         assert!(script.contains(r#""C:\\Users\\me\\\"tIDE\"\\ready.txt""#));
         assert!(script.contains(r#""C:\\Users\\me\\samples""#));
+        assert!(script.contains(r#""C:\\Users\\me\\derived""#));
+        assert!(script.contains(r#""C:\\Users\\me\\reload.txt""#));
         assert!(script.contains("SuperDirt(2, s)"));
         assert!(script.contains("var inDevice = \"Mic \\\"Pro\\\"\";"));
         assert!(script.contains("var outDevice = \"Speakers\";"));
@@ -588,11 +615,21 @@ mod tests {
         assert!(script.contains("numInputBusChannels = 0"));
         assert!(script.contains("numBuffers = 1024 * 256"));
         assert!(script.contains("maxNodes = 1024 * 32"));
+        assert!(script.contains("File.exists(reloadFlag)"));
+        assert!(script.contains("loadSoundFiles(derived ++ \"/*\")"));
+        assert!(script.contains("File.delete(reloadFlag)"));
+        assert!(script.contains("samples reloaded"));
 
-        // Without a samples dir the script must still be valid and explicit about silence.
-        let headless_script =
-            render_boot_script(Path::new("/tmp/ready.txt"), None, &AudioDevices::default());
+        let headless_script = render_boot_script(
+            Path::new("/tmp/ready.txt"),
+            None,
+            Path::new("/tmp/derived"),
+            Path::new("/tmp/reload.txt"),
+            &AudioDevices::default(),
+        );
         assert!(!headless_script.contains(SAMPLES_PLACEHOLDER));
+        assert!(!headless_script.contains(DERIVED_PLACEHOLDER));
+        assert!(!headless_script.contains(RELOAD_PLACEHOLDER));
         assert!(headless_script.contains("no Dirt-Samples directory configured"));
         assert!(headless_script.contains("var inDevice = \"\";"));
         assert!(headless_script.contains("var outDevice = \"\";"));
@@ -692,6 +729,77 @@ mod tests {
             !port_held(OSC_PORT),
             "OSC {OSC_PORT} still held — scsynth was orphaned"
         );
+        launcher.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[ignore = "requires SuperCollider (sclang) — boots a real engine and reloads derived samples"]
+    fn superdirt_reload_derived_samples() {
+        use crate::library::dsp::{self, Decoded};
+        use crate::library::transform::{derived_dir, reload_flag_path};
+
+        let (launcher, rx) = EngineLauncher::for_test();
+        let dir = std::env::temp_dir().join(format!(
+            "tide-engine-reload-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        launcher
+            .start(
+                Engine::SuperDirt,
+                dir.clone(),
+                None,
+                AudioDevices::default(),
+            )
+            .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(90);
+        let mut live = false;
+        let mut log = String::new();
+        while Instant::now() < deadline && !live {
+            match rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(SessionEvent::Output { text, .. }) => log.push_str(&text),
+                Ok(SessionEvent::Engine {
+                    status: EngineState::Live,
+                    ..
+                }) => live = true,
+                _ => {}
+            }
+        }
+        assert!(live, "engine never reached Live\nengine output:\n{log}");
+
+        let name = "tide-reload-probe";
+        let out = derived_dir(&dir).join(name).join(format!("{name}.wav"));
+        std::fs::create_dir_all(out.parent().unwrap()).unwrap();
+        let decoded = Decoded {
+            samples: (0..441).map(|i| i as f32 / 441.0 * 0.5).collect(),
+            sample_rate: 44100,
+            channels: 1,
+        };
+        dsp::encode_wav(&out, &decoded, 16).expect("encode derived wav");
+
+        let flag = reload_flag_path(&dir);
+        std::fs::write(&flag, "reload").unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut reloaded = false;
+        while Instant::now() < deadline && !reloaded {
+            match rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(SessionEvent::Output { text, .. }) if text.contains("samples reloaded") => {
+                    reloaded = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(reloaded, "engine never reported 'samples reloaded'");
+        assert!(!flag.exists(), "reload flag was not consumed by the engine");
+
         launcher.stop();
         let _ = std::fs::remove_dir_all(&dir);
     }

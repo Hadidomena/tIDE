@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
@@ -55,13 +55,11 @@ pub async fn sample_transform(
     let operation = op_name(&spec).to_string();
     let parameters_json = serde_json::to_string(&spec).unwrap_or_else(|_| "{}".to_string());
 
-    let derived_dir = app
+    let data_dir = app
         .path()
         .app_data_dir()
-        .map_err(|e| format!("app data dir unavailable: {e}"))?
-        .join("samples")
-        .join("derived");
-    let out_dir = derived_dir.join(&name);
+        .map_err(|e| format!("app data dir unavailable: {e}"))?;
+    let out_dir = derived_dir(&data_dir).join(&name);
     std::fs::create_dir_all(&out_dir).map_err(|e| format!("create {}: {e}", out_dir.display()))?;
     let out = out_dir.join(format!("{name}.wav"));
 
@@ -120,6 +118,26 @@ pub async fn sample_transform(
 
 pub fn derived_name(stem: &str, op: &Op) -> String {
     sanitize(&format!("{}-{}", stem, op_suffix(op)))
+}
+
+pub fn derived_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join("samples").join("derived")
+}
+
+pub fn reload_flag_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("engine").join("reload.txt")
+}
+
+#[tauri::command]
+pub fn sample_reload(app: AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app data dir unavailable: {e}"))?;
+    let flag = reload_flag_path(&data_dir);
+    std::fs::write(&flag, "reload")
+        .map_err(|e| format!("cannot write reload flag {}: {e}", flag.display()))
 }
 
 fn op_name(op: &Op) -> &'static str {
