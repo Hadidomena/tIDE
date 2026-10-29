@@ -8,6 +8,7 @@ pub mod toolchain;
 
 use tauri_plugin_sql::{Migration, MigrationKind};
 
+use export::{export_start, export_stop};
 use library::transform::{dirt_samples_groups, sample_reload, sample_transform};
 use project::{project_open, project_save};
 use session::{Session, session_eval, session_eval_file, session_restart, session_start};
@@ -49,7 +50,9 @@ pub fn run() {
             audio_devices,
             sample_transform,
             sample_reload,
-            dirt_samples_groups
+            dirt_samples_groups,
+            export_start,
+            export_stop
         ])
         .build(tauri::generate_context!())
         .expect("error while building tIDE")

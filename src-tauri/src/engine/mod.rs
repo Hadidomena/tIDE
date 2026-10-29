@@ -70,6 +70,7 @@ struct Running {
     engine: Engine,
     child: Arc<Mutex<Child>>,
     lines: Receiver<String>,
+    stop_flag: PathBuf,
 }
 
 pub struct EngineLauncher {
@@ -388,6 +389,7 @@ fn start_superdirt(
                         engine: Engine::SuperDirt,
                         child,
                         lines,
+                        stop_flag,
                     });
                 }
             } else if let Some(reason) = content.strip_prefix("failed:") {
@@ -427,6 +429,8 @@ fn shutdown(
     status: &Arc<Mutex<EngineStatus>>,
     why: &str,
 ) {
+    let _ = std::fs::write(&run.stop_flag, "stop");
+    thread::sleep(Duration::from_millis(650));
     kill_group(&run.child);
     drain(&run, evt);
     emit_engine(evt, run.engine, EngineState::Down, why);
@@ -829,6 +833,64 @@ mod tests {
         assert!(reloaded, "engine never reported 'samples reloaded'");
         assert!(!flag.exists(), "reload flag was not consumed by the engine");
 
+        launcher.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[ignore = "requires SuperCollider (sclang) — boots a real engine and records a WAV"]
+    fn superdirt_export_records_a_file() {
+        use crate::export;
+
+        let (launcher, rx) = EngineLauncher::for_test();
+        let dir = std::env::temp_dir().join(format!(
+            "tide-engine-export-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        launcher
+            .start(
+                Engine::SuperDirt,
+                dir.clone(),
+                None,
+                AudioDevices::default(),
+            )
+            .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(90);
+        let mut live = false;
+        let mut log = String::new();
+        while Instant::now() < deadline && !live {
+            match rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(SessionEvent::Output { text, .. }) => log.push_str(&text),
+                Ok(SessionEvent::Engine {
+                    status: EngineState::Live,
+                    ..
+                }) => live = true,
+                _ => {}
+            }
+        }
+        assert!(live, "engine never reached Live\nengine output:\n{log}");
+
+        let status = export::start_in(&dir, Some(1.5), Some("int16".to_string())).unwrap();
+        assert!(status.recording);
+        thread::sleep(Duration::from_secs(3));
+
+        let decoded = crate::library::dsp::decode(Path::new(&status.path))
+            .expect("exported wav should decode");
+        assert!(decoded.frames() > 0, "exported wav has no frames");
+        assert!(
+            decoded.duration_ms() >= 1000,
+            "exported wav too short: {} ms",
+            decoded.duration_ms()
+        );
+
+        let _ = export::stop_in(&dir);
         launcher.stop();
         let _ = std::fs::remove_dir_all(&dir);
     }

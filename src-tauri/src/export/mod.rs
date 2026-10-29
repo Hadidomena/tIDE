@@ -1,6 +1,9 @@
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Where exported recordings are written: `data_dir/exports`.
+use serde::Serialize;
+use tauri::{AppHandle, Manager};
+
 pub fn exports_dir(data_dir: &Path) -> PathBuf {
     data_dir.join("exports")
 }
@@ -13,9 +16,139 @@ pub fn stop_flag_path(data_dir: &Path) -> PathBuf {
     data_dir.join("engine").join("stoprecord.txt")
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportStatus {
+    pub recording: bool,
+    pub path: String,
+    pub format: String,
+    pub duration_secs: f64,
+}
+
+const FORMATS: [&str; 3] = ["float", "int16", "int24"];
+
+#[tauri::command]
+pub fn export_start(
+    duration_secs: Option<f64>,
+    format: Option<String>,
+    app: AppHandle,
+) -> Result<ExportStatus, String> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app data dir unavailable: {e}"))?;
+    start_in(&data_dir, duration_secs, format)
+}
+
+#[tauri::command]
+pub fn export_stop(app: AppHandle) -> Result<(), String> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app data dir unavailable: {e}"))?;
+    stop_in(&data_dir)
+}
+
+pub fn start_in(
+    data_dir: &Path,
+    duration_secs: Option<f64>,
+    format: Option<String>,
+) -> Result<ExportStatus, String> {
+    let format = format.unwrap_or_else(|| "int16".to_string());
+    if !FORMATS.contains(&format.as_str()) {
+        return Err(format!(
+            "unsupported format '{format}' (use float|int16|int24)"
+        ));
+    }
+    let duration = duration_secs
+        .filter(|d| d.is_finite() && *d > 0.0)
+        .unwrap_or(-1.0);
+
+    let dir = exports_dir(data_dir);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+    let path = dir.join(format!("tIDE-{}.wav", utc_stamp(SystemTime::now())));
+
+    let flag = record_flag_path(data_dir);
+    ensure_parent(&flag)?;
+    write_atomic(
+        &flag,
+        &format!("{}\n{}\n{}\n", path.display(), duration, format),
+    )?;
+
+    Ok(ExportStatus {
+        recording: true,
+        path: path.display().to_string(),
+        format,
+        duration_secs: duration,
+    })
+}
+
+pub fn stop_in(data_dir: &Path) -> Result<(), String> {
+    let flag = stop_flag_path(data_dir);
+    ensure_parent(&flag)?;
+    write_atomic(&flag, "stop")
+}
+
+fn ensure_parent(path: &Path) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+    }
+    Ok(())
+}
+
+fn write_atomic(path: &Path, content: &str) -> Result<(), String> {
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, content).map_err(|e| format!("write {}: {e}", tmp.display()))?;
+    let _ = std::fs::remove_file(path); // rename-over isn't portable (Windows)
+    std::fs::rename(&tmp, path).map_err(|e| format!("rename {}: {e}", tmp.display()))
+}
+
+fn utc_stamp(now: SystemTime) -> String {
+    let secs = now
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let days = (secs / 86_400) as i64;
+    let secs_of_day = (secs % 86_400) as u32;
+    let (year, month, day) = civil_from_days(days);
+    let (hh, mm, ss) = (
+        secs_of_day / 3600,
+        (secs_of_day % 3600) / 60,
+        secs_of_day % 60,
+    );
+    format!("{year:04}{month:02}{day:02}-{hh:02}{mm:02}{ss:02}")
+}
+
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097; // [0, 146096]
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+    (y + i64::from(m <= 2), m as u32, d as u32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "tide-export-{tag}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
 
     #[test]
     fn paths_are_rooted_at_data_dir() {
@@ -29,5 +162,71 @@ mod tests {
             stop_flag_path(data),
             Path::new("/tmp/tide/engine/stoprecord.txt")
         );
+    }
+
+    #[test]
+    fn utc_stamp_matches_known_dates() {
+        assert_eq!(utc_stamp(UNIX_EPOCH), "19700101-000000");
+        assert_eq!(
+            utc_stamp(UNIX_EPOCH + Duration::from_secs(946_684_800)),
+            "20000101-000000"
+        );
+        assert_eq!(
+            utc_stamp(UNIX_EPOCH + Duration::from_secs(1_709_164_800)),
+            "20240229-000000"
+        );
+        assert_eq!(
+            utc_stamp(UNIX_EPOCH + Duration::from_secs(946_684_800 + 3_661)),
+            "20000101-010101"
+        );
+    }
+
+    #[test]
+    fn start_writes_a_line_based_request() {
+        let data = temp_dir("start");
+        let status = start_in(&data, Some(2.5), Some("int24".to_string())).unwrap();
+        assert!(status.recording);
+        assert_eq!(status.format, "int24");
+        assert!((status.duration_secs - 2.5).abs() < 1e-9);
+        assert!(status.path.ends_with(".wav"));
+
+        let raw = std::fs::read_to_string(record_flag_path(&data)).unwrap();
+        let lines: Vec<&str> = raw.lines().collect();
+        assert_eq!(
+            lines.len(),
+            3,
+            "request must be path/duration/format: {raw:?}"
+        );
+        assert_eq!(lines[0], status.path);
+        assert_eq!(lines[1], "2.5");
+        assert_eq!(lines[2], "int24");
+
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn start_defaults_to_manual_int16() {
+        let data = temp_dir("defaults");
+        let status = start_in(&data, None, None).unwrap();
+        assert_eq!(status.format, "int16");
+        assert_eq!(status.duration_secs, -1.0);
+        let raw = std::fs::read_to_string(record_flag_path(&data)).unwrap();
+        assert!(raw.contains("\n-1\nint16\n"), "{raw:?}");
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn start_rejects_unknown_format() {
+        let data = temp_dir("badfmt");
+        assert!(start_in(&data, None, Some("mp3".to_string())).is_err());
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn stop_writes_the_stop_flag() {
+        let data = temp_dir("stop");
+        stop_in(&data).unwrap();
+        assert!(stop_flag_path(&data).is_file());
+        let _ = std::fs::remove_dir_all(&data);
     }
 }

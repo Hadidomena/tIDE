@@ -84,6 +84,7 @@ s.waitForBoot(
 			};
 			if (recordFlag.size > 0 and: { stopFlag.size > 0 }) {
 				fork {
+					var recording = false;
 					loop {
 						0.5.wait;
 						if (File.exists(recordFlag)) {
@@ -96,11 +97,12 @@ s.waitForBoot(
 								var format = if (fmtLine.size > 0) { fmtLine } { "float" };
 								s.recorder.recSampleFormat = format;
 								s.record(outPath, 0, 2, nil, duration);
+								recording = true;
 							};
 							File.delete(recordFlag);
 						};
 						if (File.exists(stopFlag)) {
-							s.stopRecording;
+							if (recording) { s.stopRecording; recording = false; };
 							File.delete(stopFlag);
 						};
 					};
