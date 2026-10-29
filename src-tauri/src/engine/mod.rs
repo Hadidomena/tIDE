@@ -18,6 +18,7 @@ const SAMPLES_PLACEHOLDER: &str = "__TIDE_SAMPLES__";
 const DERIVED_PLACEHOLDER: &str = "__TIDE_DERIVED__";
 const RELOAD_PLACEHOLDER: &str = "__TIDE_RELOAD__";
 const IN_DEVICE_PLACEHOLDER: &str = "__TIDE_IN_DEVICE__";
+const IN_CHANNELS_PLACEHOLDER: &str = "__TIDE_IN_CHANNELS__";
 const OUT_DEVICE_PLACEHOLDER: &str = "__TIDE_OUT_DEVICE__";
 const BOOT_SCRIPT: &str = include_str!("../../resources/boot-superdirt.scd");
 
@@ -36,9 +37,51 @@ pub enum EngineState {
     Down,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum AudioInput {
+    #[default]
+    Off,
+    SystemDefault,
+    Device(String),
+}
+
+impl AudioInput {
+    fn is_named(&self) -> bool {
+        matches!(self, AudioInput::Device(_))
+    }
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(tag = "mode", rename_all = "camelCase")]
+pub enum AudioInputChoice {
+    Off,
+    Default,
+    Device { name: String },
+}
+
+impl From<AudioInputChoice> for AudioInput {
+    fn from(choice: AudioInputChoice) -> Self {
+        match choice {
+            AudioInputChoice::Off => AudioInput::Off,
+            AudioInputChoice::Default => AudioInput::SystemDefault,
+            AudioInputChoice::Device { name } => AudioInput::Device(name.trim().to_string()),
+        }
+    }
+}
+
+impl AudioInputChoice {
+    pub fn resolve(choice: Option<AudioInputChoice>) -> AudioInput {
+        match choice {
+            None => AudioInput::Off,
+            Some(AudioInputChoice::Device { name }) if name.trim().is_empty() => AudioInput::Off,
+            Some(choice) => choice.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct AudioDevices {
-    pub input: Option<String>,
+    pub input: AudioInput,
     pub output: Option<String>,
 }
 
@@ -224,7 +267,7 @@ fn start_engine(
             Ok(None)
         }
         Engine::SuperDirt => {
-            let custom_devices = devices.input.is_some() || devices.output.is_some();
+            let custom_devices = devices.input.is_named() || devices.output.is_some();
             match start_superdirt(data_dir, sclang_override.clone(), devices, rx, evt, status) {
                 Ok(running) => Ok(Some(running)),
                 Err(reason) if custom_devices => {
@@ -551,11 +594,11 @@ fn render_boot_script(
         .unwrap_or_default();
     let derived = escape_sc_string(&derived.display().to_string());
     let reload_flag = escape_sc_string(&reload_flag.display().to_string());
-    let input = devices
-        .input
-        .as_deref()
-        .map(escape_sc_string)
-        .unwrap_or_default();
+    let (input, input_channels) = match &devices.input {
+        AudioInput::Off => (String::new(), "0"),
+        AudioInput::SystemDefault => (String::new(), "2"),
+        AudioInput::Device(name) => (escape_sc_string(name), "2"),
+    };
     let output = devices
         .output
         .as_deref()
@@ -570,6 +613,7 @@ fn render_boot_script(
         .replace(DERIVED_PLACEHOLDER, &derived)
         .replace(RELOAD_PLACEHOLDER, &reload_flag)
         .replace(IN_DEVICE_PLACEHOLDER, &input)
+        .replace(IN_CHANNELS_PLACEHOLDER, input_channels)
         .replace(OUT_DEVICE_PLACEHOLDER, &output)
 }
 
@@ -589,7 +633,7 @@ mod tests {
             Path::new(r#"C:\Users\me\derived"#),
             Path::new(r#"C:\Users\me\reload.txt"#),
             &AudioDevices {
-                input: Some("Mic \"Pro\"".to_string()),
+                input: AudioInput::Device("Mic \"Pro\"".to_string()),
                 output: Some("Speakers".to_string()),
             },
         );
@@ -597,14 +641,20 @@ mod tests {
         assert!(!script.contains(SAMPLES_PLACEHOLDER));
         assert!(!script.contains(DERIVED_PLACEHOLDER));
         assert!(!script.contains(RELOAD_PLACEHOLDER));
+        assert!(!script.contains(IN_DEVICE_PLACEHOLDER));
+        assert!(!script.contains(IN_CHANNELS_PLACEHOLDER));
+        assert!(!script.contains(OUT_DEVICE_PLACEHOLDER));
         assert!(script.contains(r#""C:\\Users\\me\\\"tIDE\"\\ready.txt""#));
         assert!(script.contains(r#""C:\\Users\\me\\samples""#));
         assert!(script.contains(r#""C:\\Users\\me\\derived""#));
         assert!(script.contains(r#""C:\\Users\\me\\reload.txt""#));
         assert!(script.contains("SuperDirt(2, s)"));
         assert!(script.contains("var inDevice = \"Mic \\\"Pro\\\"\";"));
+        assert!(script.contains("var inChannels = 2;"));
         assert!(script.contains("var outDevice = \"Speakers\";"));
         assert!(script.contains("s.options.outDevice = outDevice;"));
+        assert!(script.contains("s.options.numInputBusChannels = inChannels;"));
+        assert!(script.contains("s.options.inDevice = inDevice;"));
         assert!(script.contains("loadSoundFiles"));
         assert!(script.contains("soundLibrary.fileExtensions"));
         assert!(script.contains("\"flac\""));
@@ -612,7 +662,6 @@ mod tests {
         assert!(script.contains("start(57120, 0 ! 16)"));
         assert!(script.contains("SynthDef(\\chip"));
         assert!(script.contains("SynthDef(\\chipbass"));
-        assert!(script.contains("numInputBusChannels = 0"));
         assert!(script.contains("numBuffers = 1024 * 256"));
         assert!(script.contains("maxNodes = 1024 * 32"));
         assert!(script.contains("File.exists(reloadFlag)"));
@@ -632,7 +681,77 @@ mod tests {
         assert!(!headless_script.contains(RELOAD_PLACEHOLDER));
         assert!(headless_script.contains("no Dirt-Samples directory configured"));
         assert!(headless_script.contains("var inDevice = \"\";"));
+        assert!(headless_script.contains("var inChannels = 0;"));
         assert!(headless_script.contains("var outDevice = \"\";"));
+    }
+
+    #[test]
+    fn boot_script_encodes_each_input_mode() {
+        let render = |input: AudioInput| {
+            render_boot_script(
+                Path::new("/tmp/ready.txt"),
+                None,
+                Path::new("/tmp/derived"),
+                Path::new("/tmp/reload.txt"),
+                &AudioDevices {
+                    input,
+                    output: None,
+                },
+            )
+        };
+
+        let off = render(AudioInput::Off);
+        assert!(off.contains("var inDevice = \"\";"));
+        assert!(off.contains("var inChannels = 0;"));
+
+        let default = render(AudioInput::SystemDefault);
+        assert!(default.contains("var inDevice = \"\";"));
+        assert!(default.contains("var inChannels = 2;"));
+
+        let named = render(AudioInput::Device("Hearing aid".to_string()));
+        assert!(named.contains("var inDevice = \"Hearing aid\";"));
+        assert!(named.contains("var inChannels = 2;"));
+    }
+
+    #[test]
+    fn input_choice_maps_to_engine_input() {
+        assert_eq!(AudioInputChoice::resolve(None), AudioInput::Off);
+        assert_eq!(
+            AudioInputChoice::resolve(Some(AudioInputChoice::Off)),
+            AudioInput::Off
+        );
+        assert_eq!(
+            AudioInputChoice::resolve(Some(AudioInputChoice::Default)),
+            AudioInput::SystemDefault
+        );
+        assert_eq!(
+            AudioInputChoice::resolve(Some(AudioInputChoice::Device {
+                name: "  Mic  ".to_string()
+            })),
+            AudioInput::Device("Mic".to_string())
+        );
+        assert_eq!(
+            AudioInputChoice::resolve(Some(AudioInputChoice::Device {
+                name: "   ".to_string()
+            })),
+            AudioInput::Off
+        );
+    }
+
+    #[test]
+    fn input_choice_deserializes_from_frontend_json() {
+        let off: AudioInputChoice = serde_json::from_str(r#"{"mode":"off"}"#).unwrap();
+        assert_eq!(AudioInput::from(off), AudioInput::Off);
+
+        let default: AudioInputChoice = serde_json::from_str(r#"{"mode":"default"}"#).unwrap();
+        assert_eq!(AudioInput::from(default), AudioInput::SystemDefault);
+
+        let device: AudioInputChoice =
+            serde_json::from_str(r#"{"mode":"device","name":"Hearing aid"}"#).unwrap();
+        assert_eq!(
+            AudioInput::from(device),
+            AudioInput::Device("Hearing aid".to_string())
+        );
     }
 
     #[test]

@@ -254,22 +254,34 @@ pub fn list_audio_devices() -> Result<AudioDeviceList, String> {
     let outcome = run(&sclang, &[&script_arg], Duration::from_secs(30));
     let _ = std::fs::remove_file(&script);
     let outcome = outcome?;
-    let mut list = AudioDeviceList {
-        inputs: Vec::new(),
-        outputs: Vec::new(),
-    };
-    for line in outcome.stdout.lines() {
-        let line = line.trim();
-        if let Some(name) = line.strip_prefix("TIDE-IN ") {
-            list.inputs.push(name.to_string());
-        } else if let Some(name) = line.strip_prefix("TIDE-OUT ") {
-            list.outputs.push(name.to_string());
-        }
-    }
+    let list = parse_device_lines(&outcome.stdout);
     if list.inputs.is_empty() && list.outputs.is_empty() {
         return Err("SuperCollider reported no audio devices".to_string());
     }
     Ok(list)
+}
+
+fn parse_device_lines(stdout: &str) -> AudioDeviceList {
+    let mut list = AudioDeviceList {
+        inputs: Vec::new(),
+        outputs: Vec::new(),
+    };
+    for line in stdout.lines() {
+        let line = line.trim();
+        if let Some(name) = line.strip_prefix("TIDE-IN ") {
+            push_unique(&mut list.inputs, name);
+        } else if let Some(name) = line.strip_prefix("TIDE-OUT ") {
+            push_unique(&mut list.outputs, name);
+        }
+    }
+    list
+}
+
+fn push_unique(devices: &mut Vec<String>, name: &str) {
+    let name = name.trim();
+    if !name.is_empty() && !devices.iter().any(|existing| existing == name) {
+        devices.push(name.to_string());
+    }
 }
 
 #[tauri::command]
@@ -647,6 +659,22 @@ mod tests {
         let parsed: Overrides = serde_json::from_str(r#"{"ghcPath":"/x/ghc"}"#).unwrap();
         assert_eq!(parsed.ghc_path.as_deref(), Some("/x/ghc"));
         assert_eq!(parsed.sclang_path, None);
+    }
+
+    #[test]
+    fn parses_and_dedupes_device_lines() {
+        let list = parse_device_lines(
+            "compiling class library...\n\
+             TIDE-IN Hearing aid\n\
+             TIDE-IN   Hearing aid  \n\
+             TIDE-IN \n\
+             TIDE-IN Built-in Mic\n\
+             TIDE-OUT Speakers\n\
+             TIDE-OUT Speakers\n\
+             TIDE-OUT HDMI\n",
+        );
+        assert_eq!(list.inputs, vec!["Hearing aid", "Built-in Mic"]);
+        assert_eq!(list.outputs, vec!["Speakers", "HDMI"]);
     }
 
     #[test]

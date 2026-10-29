@@ -63,9 +63,15 @@ Open the **Diagnostics** pane in the app to see exactly what is detected and wha
 
 The **logs** panel (GHCi + engine output) is hidden by default — toggle it with the `logs` button.
 Audio input/output devices can be selected in **Diagnostics** (the list comes from SuperCollider
-itself). Changing them applies after restarting the session; if the selected device cannot be
-opened, the engine falls back to the system defaults and says so in the logs; an input device is optional and
-disabled by default (avoids sample-rate mismatches with a 16 kHz mic).
+itself). Changing them applies after restarting the session. Input has three explicit choices:
+**off — no input channels** (the default, avoids sample-rate mismatches with a 16 kHz mic),
+**system default input** (whatever the OS currently uses, opened with 2 channels), or a specific
+device. If the selected device cannot be opened, the engine falls back to the system defaults and
+says so in the logs; a device that disappeared is reported as _not connected_ in the picker.
+
+> macOS note: SuperCollider's CoreAudio backend still opens the OS default input device at the
+> driver level even when 0 input channels are requested. tIDE passes 0 channels, so SuperDirt never
+> receives input, but the system may still show the default input as in use.
 
 The full set of Tidal boot aliases is available: `setcps`, `setbpm`, `getcps`, `getbpm`, `solo`,
 `unsolo`, `mute`, `unmute`, `once`, `first`, `asap`, `all`, `nudgeAll`, `resetCycles`, `hush`,

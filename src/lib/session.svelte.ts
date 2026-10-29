@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import type { AudioInputChoice } from './diagnostics.svelte';
 
 export type SessionState = 'stopped' | 'starting' | 'ready' | 'busy' | 'failed';
 
@@ -34,7 +35,7 @@ class SessionModel {
 
 	async connect(
 		engine: string | null = null,
-		audioIn: string | null = null,
+		audioIn: AudioInputChoice | null = null,
 		audioOut: string | null = null
 	) {
 		if (this.connected) return;
@@ -85,7 +86,7 @@ class SessionModel {
 
 	async start(
 		engine: string | null = null,
-		audioIn: string | null = null,
+		audioIn: AudioInputChoice | null = null,
 		audioOut: string | null = null
 	) {
 		try {
@@ -128,7 +129,7 @@ class SessionModel {
 
 	async restart(
 		engine: string | null = null,
-		audioIn: string | null = null,
+		audioIn: AudioInputChoice | null = null,
 		audioOut: string | null = null
 	) {
 		try {
