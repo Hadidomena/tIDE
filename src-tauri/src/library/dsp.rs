@@ -311,6 +311,49 @@ pub fn encode_wav(path: &Path, decoded: &Decoded, bits_per_sample: u16) -> Resul
     Ok(size)
 }
 
+pub fn encode_flac(path: &Path, decoded: &Decoded, bits_per_sample: u16) -> Result<u64> {
+    use flacenc::component::BitRepr;
+    use flacenc::error::Verify;
+
+    let bits = match bits_per_sample {
+        16 | 24 => bits_per_sample,
+        _ => {
+            return Err(format!(
+                "unsupported flac bits_per_sample {bits_per_sample} (use 16 or 24)"
+            ));
+        }
+    };
+    let scale = ((1i64 << (bits - 1)) - 1) as f32; // 32767 / 8_388_607
+    let samples: Vec<i32> = decoded
+        .samples
+        .iter()
+        .map(|&s| (s.clamp(-1.0, 1.0) * scale) as i32)
+        .collect();
+
+    let config = flacenc::config::Encoder::default()
+        .into_verified()
+        .map_err(|(_, e)| format!("flac config: {e}"))?;
+    let frames = decoded.samples.len() / decoded.channels.max(1) as usize;
+    if frames == 0 {
+        return Err("no samples to encode to flac".to_string());
+    }
+    let block_size = config.block_size.min(frames);
+    let source = flacenc::source::MemSource::from_samples(
+        &samples,
+        decoded.channels.max(1) as usize,
+        bits as usize,
+        decoded.sample_rate as usize,
+    );
+    let stream = flacenc::encode_with_fixed_block_size(&config, source, block_size)
+        .map_err(|e| format!("flac encode: {e:?}"))?;
+    let mut sink = flacenc::bitsink::ByteSink::new();
+    stream
+        .write(&mut sink)
+        .map_err(|_| "flac stream write failed".to_string())?;
+    std::fs::write(path, sink.as_slice()).map_err(|e| format!("write {}: {e}", path.display()))?;
+    Ok(std::fs::metadata(path).map(|m| m.len()).unwrap_or(0))
+}
+
 pub fn hash(decoded: &Decoded) -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(&decoded.sample_rate.to_le_bytes());
@@ -530,6 +573,26 @@ mod tests {
         for (got, want) in decoded.samples.iter().zip(original.samples.iter()) {
             assert!((got - want).abs() < 2.0 / 32768.0, "{got} != {want}");
         }
+    }
+
+    #[test]
+    fn flac_round_trip_preserves_samples() {
+        let original = mono(
+            (0..441).map(|i| (i as f32 / 44.1).sin() * 0.8).collect(),
+            44100,
+        );
+        let out = std::env::temp_dir().join(format!("tide-dsp-flac-{}.flac", std::process::id()));
+        let size = encode_flac(&out, &original, 16).unwrap();
+        assert!(size > 0, "flac file is empty");
+
+        let decoded = decode(&out).expect("decode the encoded flac");
+        assert_eq!(decoded.sample_rate, 44100);
+        assert_eq!(decoded.channels, 1);
+        assert_eq!(decoded.frames(), 441);
+        for (got, want) in decoded.samples.iter().zip(original.samples.iter()) {
+            assert!((got - want).abs() < 2.0 / 32768.0, "{got} != {want}");
+        }
+        let _ = std::fs::remove_file(&out);
     }
 
     #[test]

@@ -42,7 +42,7 @@
 
 	const ENGINE_CHOICES: EngineChoice[] = ['auto', 'superdirt', 'headless'];
 	const OPS: TransformOp[] = ['reverse', 'trim', 'normalize', 'gain', 'fade'];
-	const EXPORT_FORMATS: ExportFormat[] = ['int16', 'int24', 'float'];
+	const EXPORT_FORMATS: ExportFormat[] = ['int16', 'int24', 'float', 'flac'];
 	const EXPORT_DURATIONS = [
 		{ label: 'manual', value: -1 },
 		{ label: '10 s', value: 10 },
@@ -552,7 +552,7 @@ d1 $ s "bd sn:1 ~ hh"
 							class="segbtn"
 							class:on={exporter.durationSecs === d.value}
 							type="button"
-							disabled={exporter.recording}
+							disabled={exporter.recording || exporter.converting}
 							onclick={() => (exporter.durationSecs = d.value)}>{d.label}</button
 						>
 					{/each}
@@ -567,7 +567,7 @@ d1 $ s "bd sn:1 ~ hh"
 							class="segbtn"
 							class:on={exporter.format === f}
 							type="button"
-							disabled={exporter.recording}
+							disabled={exporter.recording || exporter.converting}
 							onclick={() => (exporter.format = f)}>{f}</button
 						>
 					{/each}
@@ -579,12 +579,20 @@ d1 $ s "bd sn:1 ~ hh"
 				<div class="export-status">
 					<span class="dot rec" style:visibility={exporter.recording ? 'visible' : 'hidden'}></span>
 					<span class="time">{formatElapsed(exporter.elapsedMs)}</span>
-					<span class="muted">{exporter.recording ? 'recording…' : 'idle'}</span>
+					<span class="muted"
+						>{exporter.recording
+							? 'recording…'
+							: exporter.converting
+								? 'converting…'
+								: 'idle'}</span
+					>
 				</div>
 			</div>
 
 			{#if exporter.recording}
 				<button class="tbtn" type="button" onclick={() => void stopExport()}>stop</button>
+			{:else if exporter.converting}
+				<button class="tbtn" type="button" disabled>converting…</button>
 			{:else}
 				<button
 					class="tbtn"
