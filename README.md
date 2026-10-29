@@ -3,7 +3,8 @@
 tIDE is an integrated development environment for the Tidal language.
 
 **Status:** editor with Tidal highlighting, live GHCi session, SuperDirt/headless engine
-orchestration, toolchain detection + diagnostics, project open/save. Sample library, transforms
+orchestration, toolchain detection + diagnostics, project open/save, and destructive sample
+transforms (reverse/trim/normalize/gain/fade, live-reloaded into the engine). Sample library import
 and pattern analysis land in later milestones.
 
 ## Prerequisites
@@ -69,6 +70,21 @@ disabled by default (avoids sample-rate mismatches with a 16 kHz mic).
 The full set of Tidal boot aliases is available: `setcps`, `setbpm`, `getcps`, `getbpm`, `solo`,
 `unsolo`, `mute`, `unmute`, `once`, `first`, `asap`, `all`, `nudgeAll`, `resetCycles`, `hush`,
 `panic`, and `d1`…`d16` (each `dN` uses orbit N−1).
+
+### Sample transforms
+
+The **transform** button (header) opens the transform panel: pick a source (a Dirt-Samples file, or
+browse for any wav/aif/flac/mp3/ogg/caf), choose an operation — `reverse`, `trim`, `normalize`
+(peak/rms), `gain` (dB), or `fade` (in/out ms) — and **apply**.
+
+- Results are written as real WAV files under the app-data dir
+  (`…/samples/derived/<name>/<name>.wav`); the source is never overwritten.
+- The name is the source file stem + operation + params, e.g. `kick-01-reverse`,
+  `bd-normalize-peak`, `hat-gain-m3`. Use it in Tidal: `d1 $ s "kick-01-reverse"`.
+- On a live SuperDirt engine derived samples are **reloaded automatically** — no restart needed. On a
+  headless/down engine they load on the next SuperDirt start.
+- Each derived sample is also registered in the local database (`samples` + `sample_transformations`).
+- **preview** plays it once; **copy name** copies the Tidal sample name.
 
 ## Quickstart (development)
 
