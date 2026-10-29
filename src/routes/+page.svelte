@@ -12,10 +12,12 @@
 		detectToolchain,
 		diagnostics,
 		initDiagnostics,
+		inputChoice,
 		loadDevices,
 		resolveEngine,
 		setEngineChoice,
 		setInputDevice,
+		setInputMode,
 		setOutputDevice,
 		type EngineChoice
 	} from '$lib/diagnostics.svelte';
@@ -68,11 +70,7 @@ d1 $ s "bd sn:1 ~ hh"
 	onMount(() => {
 		void (async () => {
 			await initDiagnostics();
-			await session.connect(
-				resolveEngine(),
-				diagnostics.inputDevice || null,
-				diagnostics.outputDevice || null
-			);
+			await session.connect(resolveEngine(), inputChoice(), diagnostics.outputDevice || null);
 			void detectToolchain();
 		})();
 	});
@@ -86,12 +84,7 @@ d1 $ s "bd sn:1 ~ hh"
 	});
 
 	$effect(() => {
-		if (
-			diagnostics.open &&
-			diagnostics.inputDevices.length === 0 &&
-			diagnostics.outputDevices.length === 0 &&
-			!diagnostics.devicesLoading
-		) {
+		if (diagnostics.open && !diagnostics.devicesLoaded && !diagnostics.devicesLoading) {
 			void loadDevices();
 		}
 	});
@@ -180,11 +173,37 @@ d1 $ s "bd sn:1 ~ hh"
 	}
 
 	function restartWithEngine() {
-		void session.restart(
-			resolveEngine(),
-			diagnostics.inputDevice || null,
-			diagnostics.outputDevice || null
-		);
+		void session.restart(resolveEngine(), inputChoice(), diagnostics.outputDevice || null);
+	}
+
+	function toggleDiagnostics() {
+		diagnostics.open = !diagnostics.open;
+		if (diagnostics.open) diagnostics.devicesLoaded = false;
+	}
+
+	const INPUT_OFF = ':off:';
+	const INPUT_DEFAULT = ':default:';
+
+	const inputSelectValue = $derived(
+		diagnostics.inputMode === 'default'
+			? INPUT_DEFAULT
+			: diagnostics.inputMode === 'device' && diagnostics.inputDevice
+				? diagnostics.inputDevice
+				: INPUT_OFF
+	);
+
+	const inputMissing = $derived(
+		!diagnostics.devicesLoading &&
+			diagnostics.inputDevices.length > 0 &&
+			diagnostics.inputMode === 'device' &&
+			!!diagnostics.inputDevice &&
+			!diagnostics.inputDevices.includes(diagnostics.inputDevice)
+	);
+
+	function onInputChange(value: string) {
+		if (value === INPUT_OFF) void setInputMode('off');
+		else if (value === INPUT_DEFAULT) void setInputMode('default');
+		else void setInputDevice(value);
 	}
 
 	function onConsoleKey(e: KeyboardEvent) {
@@ -233,11 +252,8 @@ d1 $ s "bd sn:1 ~ hh"
 			onclick={() => (showLogs = !showLogs)}
 			aria-pressed={showLogs}>{showLogs ? 'hide logs' : 'logs'}</button
 		>
-		<button
-			class="tbtn"
-			type="button"
-			onclick={() => (diagnostics.open = !diagnostics.open)}
-			aria-pressed={diagnostics.open}>{diagnostics.open ? 'hide diag' : 'diagnostics'}</button
+		<button class="tbtn" type="button" onclick={toggleDiagnostics} aria-pressed={diagnostics.open}
+			>{diagnostics.open ? 'hide diag' : 'diagnostics'}</button
 		>
 		<button
 			class="tbtn"
@@ -334,16 +350,31 @@ d1 $ s "bd sn:1 ~ hh"
 				<span class="label">audio device (applies on restart)</span>
 				<label class="field">
 					<span>input</span>
-					<select
-						value={diagnostics.inputDevice}
-						onchange={(e) => void setInputDevice(e.currentTarget.value)}
-					>
-						<option value="">system default (off)</option>
+					<select value={inputSelectValue} onchange={(e) => onInputChange(e.currentTarget.value)}>
+						<option value={INPUT_OFF}>off — no input channels</option>
+						<option value={INPUT_DEFAULT}>system default input</option>
 						{#each diagnostics.inputDevices as device (device)}
 							<option value={device}>{device}</option>
 						{/each}
+						{#if diagnostics.inputMode === 'device' && diagnostics.inputDevice && !diagnostics.inputDevices.includes(diagnostics.inputDevice)}
+							<option value={diagnostics.inputDevice}
+								>{diagnostics.inputDevice}{inputMissing ? ' (not connected)' : ''}</option
+							>
+						{/if}
 					</select>
 				</label>
+				<span class="muted">
+					{#if diagnostics.inputMode === 'off'}
+						input off — SuperDirt boots with 0 input channels
+					{:else if diagnostics.inputMode === 'default'}
+						input on — system default device (2 channels)
+					{:else if inputMissing}
+						input on — {diagnostics.inputDevice} (not connected; SuperCollider falls back to the system
+						default)
+					{:else}
+						input on — {diagnostics.inputDevice} (2 channels)
+					{/if}
+				</span>
 				<label class="field">
 					<span>output</span>
 					<select

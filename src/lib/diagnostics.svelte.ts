@@ -3,6 +3,10 @@ import { getSetting, setSetting } from './db';
 
 export type EngineChoice = 'auto' | 'superdirt' | 'headless';
 export type ToolchainStatus = 'superDirtReady' | 'headlessOnly' | 'broken';
+export type InputMode = 'off' | 'default' | 'device';
+
+export type AudioInputChoice =
+	{ mode: 'off' } | { mode: 'default' } | { mode: 'device'; name: string };
 
 export interface ProbeResult {
 	name: string;
@@ -26,6 +30,8 @@ export const diagnostics = $state({
 	inputDevices: [] as string[],
 	outputDevices: [] as string[],
 	devicesLoading: false,
+	devicesLoaded: false,
+	inputMode: 'off' as InputMode,
 	inputDevice: '',
 	outputDevice: ''
 });
@@ -40,7 +46,19 @@ export async function initDiagnostics() {
 		if (cached === 'superDirtReady' || cached === 'headlessOnly' || cached === 'broken') {
 			diagnostics.cachedStatus = cached;
 		}
-		diagnostics.inputDevice = (await getSetting('audio_in_device')) ?? '';
+		const [savedMode, savedDevice] = await Promise.all([
+			getSetting('audio_in_mode'),
+			getSetting('audio_in_device')
+		]);
+		diagnostics.inputDevice = savedDevice ?? '';
+		if (savedMode === 'off' || savedMode === 'default' || savedMode === 'device') {
+			diagnostics.inputMode = savedMode;
+		} else {
+			diagnostics.inputMode = diagnostics.inputDevice ? 'device' : 'off';
+		}
+		if (diagnostics.inputMode === 'device' && !diagnostics.inputDevice) {
+			diagnostics.inputMode = 'off';
+		}
 		diagnostics.outputDevice = (await getSetting('audio_out_device')) ?? '';
 	} catch (e) {
 		diagnostics.error = String(e);
@@ -84,13 +102,33 @@ export async function loadDevices() {
 		diagnostics.error = String(e);
 	} finally {
 		diagnostics.devicesLoading = false;
+		diagnostics.devicesLoaded = true;
+	}
+}
+
+export function inputChoice(): AudioInputChoice {
+	if (diagnostics.inputMode === 'default') return { mode: 'default' };
+	if (diagnostics.inputMode === 'device' && diagnostics.inputDevice.trim()) {
+		return { mode: 'device', name: diagnostics.inputDevice };
+	}
+	return { mode: 'off' };
+}
+
+export async function setInputMode(mode: InputMode) {
+	diagnostics.inputMode = mode;
+	try {
+		await setSetting('audio_in_mode', mode);
+	} catch (e) {
+		diagnostics.error = String(e);
 	}
 }
 
 export async function setInputDevice(name: string) {
 	diagnostics.inputDevice = name;
+	diagnostics.inputMode = name.trim() ? 'device' : 'off';
 	try {
 		await setSetting('audio_in_device', name);
+		await setSetting('audio_in_mode', diagnostics.inputMode);
 	} catch (e) {
 		diagnostics.error = String(e);
 	}

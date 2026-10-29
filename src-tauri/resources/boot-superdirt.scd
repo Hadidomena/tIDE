@@ -6,6 +6,7 @@ var reloadFlag = "__TIDE_RELOAD__";
 var recordFlag = "__TIDE_RECORD__";
 var stopFlag = "__TIDE_STOPRECORD__";
 var inDevice = "__TIDE_IN_DEVICE__";
+var inChannels = __TIDE_IN_CHANNELS__;
 var outDevice = "__TIDE_OUT_DEVICE__";
 var writeMarker = { |text|
 	var f = File(marker, "w");
@@ -36,10 +37,9 @@ var chipSynths = {
 	}).add;
 	s.sync;
 };
-s.options.numInputBusChannels = 0;
-if (inDevice.size > 0) {
+s.options.numInputBusChannels = inChannels;
+if (inChannels > 0 and: { inDevice.size > 0 }) {
 	s.options.inDevice = inDevice;
-	s.options.numInputBusChannels = 2;
 };
 if (outDevice.size > 0) {
 	s.options.outDevice = outDevice;
