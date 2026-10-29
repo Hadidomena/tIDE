@@ -1,6 +1,6 @@
 pub mod process;
 
-use crate::engine::{AudioDevices, Engine, EngineLauncher, EngineState};
+use crate::engine::{AudioDevices, AudioInputChoice, Engine, EngineLauncher, EngineState};
 use process::{
     PRELUDE, PROMPT_SETUP, Statement, is_ready, prelude_prompts, split_statements, wrap_code,
 };
@@ -215,7 +215,7 @@ impl Session {
 #[tauri::command]
 pub fn session_start(
     engine: Option<String>,
-    audio_in: Option<String>,
+    audio_in: Option<AudioInputChoice>,
     audio_out: Option<String>,
     session: State<'_, Session>,
     app: AppHandle,
@@ -243,7 +243,7 @@ pub fn session_start(
             engine,
             data_dir,
             AudioDevices {
-                input: clean_device(audio_in),
+                input: AudioInputChoice::resolve(audio_in),
                 output: clean_device(audio_out),
             },
         )?;
@@ -287,7 +287,7 @@ pub fn session_eval_file(code: String, session: State<'_, Session>) -> Result<us
 #[tauri::command]
 pub fn session_restart(
     engine: Option<String>,
-    audio_in: Option<String>,
+    audio_in: Option<AudioInputChoice>,
     audio_out: Option<String>,
     session: State<'_, Session>,
     app: AppHandle,
@@ -311,7 +311,7 @@ pub fn session_restart(
         engine,
         data_dir,
         AudioDevices {
-            input: clean_device(audio_in),
+            input: AudioInputChoice::resolve(audio_in),
             output: clean_device(audio_out),
         },
     )?;
