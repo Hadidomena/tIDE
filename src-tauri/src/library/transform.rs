@@ -140,6 +140,48 @@ pub fn sample_reload(app: AppHandle) -> Result<(), String> {
         .map_err(|e| format!("cannot write reload flag {}: {e}", flag.display()))
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirtGroup {
+    pub name: String,
+    pub files: Vec<String>,
+}
+
+#[tauri::command]
+pub fn dirt_samples_groups() -> Result<Vec<DirtGroup>, String> {
+    let root = crate::toolchain::find_dirt_samples()
+        .ok_or_else(|| "Dirt-Samples not found — install the SuperDirt quark".to_string())?;
+    let mut groups = Vec::new();
+    for entry in std::fs::read_dir(&root).map_err(|e| format!("read {}: {e}", root.display()))? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        if !entry.file_type().map_err(|e| e.to_string())?.is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        let mut files = Vec::new();
+        for f in std::fs::read_dir(entry.path()).map_err(|e| e.to_string())? {
+            let f = f.map_err(|e| e.to_string())?;
+            if f.file_type().map(|t| t.is_file()).unwrap_or(false) && is_audio(&f.path()) {
+                files.push(f.path().display().to_string());
+            }
+        }
+        files.sort();
+        groups.push(DirtGroup { name, files });
+    }
+    groups.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(groups)
+}
+
+fn is_audio(path: &Path) -> bool {
+    let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+        return false;
+    };
+    matches!(
+        ext.to_ascii_lowercase().as_str(),
+        "wav" | "aif" | "aiff" | "aifc" | "flac" | "mp3" | "ogg" | "caf"
+    )
+}
+
 fn op_name(op: &Op) -> &'static str {
     match op {
         Op::Reverse => "reverse",
@@ -293,5 +335,18 @@ mod tests {
         assert_eq!(db_token(-3.0), "m3");
         assert_eq!(db_token(0.5), "0-5");
         assert_eq!(db_token(-0.5), "m0-5");
+    }
+
+    #[test]
+    fn is_audio_accepts_supported_extensions() {
+        assert!(is_audio(Path::new("a.wav")));
+        assert!(is_audio(Path::new("a.FLAC")));
+        assert!(is_audio(Path::new("a.mp3")));
+        assert!(is_audio(Path::new("a.ogg")));
+        assert!(is_audio(Path::new("a.caf")));
+        assert!(is_audio(Path::new("a.aiff")));
+        assert!(!is_audio(Path::new("README.md")));
+        assert!(!is_audio(Path::new("a.txt")));
+        assert!(!is_audio(Path::new("noext")));
     }
 }

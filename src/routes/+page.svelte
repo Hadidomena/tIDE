@@ -20,8 +20,20 @@
 		type EngineChoice
 	} from '$lib/diagnostics.svelte';
 	import { session } from '$lib/session.svelte';
+	import {
+		applyTransform,
+		copyName,
+		loadDirtGroups,
+		pickSourceFile,
+		previewLast,
+		selectedGroupFiles,
+		selectGroup,
+		transform,
+		type TransformOp
+	} from '$lib/transform.svelte';
 
 	const ENGINE_CHOICES: EngineChoice[] = ['auto', 'superdirt', 'headless'];
+	const OPS: TransformOp[] = ['reverse', 'trim', 'normalize', 'gain', 'fade'];
 
 	let buffer = $state(`-- tIDE — live GHCi session with SuperDirt (M2)
 -- Cmd/Ctrl+Enter evaluates the current line or selection.
@@ -52,6 +64,10 @@ d1 $ s "bd sn:1 ~ hh"
 
 	$effect(() => {
 		void checkLastProject();
+	});
+
+	$effect(() => {
+		if (transform.open) void loadDirtGroups();
 	});
 
 	$effect(() => {
@@ -143,6 +159,11 @@ d1 $ s "bd sn:1 ~ hh"
 		}
 	}
 
+	function baseName(p: string) {
+		const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
+		return p.slice(i + 1);
+	}
+
 	function restartWithEngine() {
 		void session.restart(
 			resolveEngine(),
@@ -202,6 +223,12 @@ d1 $ s "bd sn:1 ~ hh"
 			type="button"
 			onclick={() => (diagnostics.open = !diagnostics.open)}
 			aria-pressed={diagnostics.open}>{diagnostics.open ? 'hide diag' : 'diagnostics'}</button
+		>
+		<button
+			class="tbtn"
+			type="button"
+			onclick={() => (transform.open = !transform.open)}
+			aria-pressed={transform.open}>{transform.open ? 'hide transform' : 'transform'}</button
 		>
 	</div>
 	<span class="chip {session.state}">
@@ -337,6 +364,145 @@ d1 $ s "bd sn:1 ~ hh"
 				</div>
 			{:else}
 				<p class="muted">no detection yet — press re-detect</p>
+			{/if}
+		</aside>
+	{/if}
+	{#if transform.open}
+		<aside class="diag transform-panel" aria-label="sample transforms">
+			<div class="diag-head">
+				<strong>transforms</strong>
+				<button class="tbtn" type="button" onclick={() => (transform.open = false)}>close</button>
+			</div>
+
+			{#if !(session.engine?.engine === 'superdirt' && session.engine.status === 'live')}
+				<p class="muted">
+					engine not live — derived samples will be loaded on the next SuperDirt start
+				</p>
+			{/if}
+
+			<div class="section">
+				<span class="label">source</span>
+				<label class="field">
+					<span>from Dirt-Samples</span>
+					<select
+						value={transform.selectedGroup}
+						onchange={(e) => selectGroup(e.currentTarget.value)}
+					>
+						<option value="">— pick a group —</option>
+						{#each transform.dirtGroups as g (g.name)}
+							<option value={g.name}>{g.name}</option>
+						{/each}
+					</select>
+				</label>
+				{#if selectedGroupFiles().length > 0}
+					<label class="field">
+						<span>file</span>
+						<select bind:value={transform.sourcePath}>
+							{#each selectedGroupFiles() as f (f)}
+								<option value={f}>{baseName(f)}</option>
+							{/each}
+						</select>
+					</label>
+				{/if}
+				<button class="tbtn" type="button" onclick={() => void pickSourceFile()}
+					>browse file…</button
+				>
+				{#if transform.sourcePath}
+					<span class="muted source">{baseName(transform.sourcePath)}</span>
+				{/if}
+			</div>
+
+			<div class="section">
+				<span class="label">operation</span>
+				<div class="seg">
+					{#each OPS as op (op)}
+						<button
+							class="segbtn"
+							class:on={transform.op === op}
+							type="button"
+							onclick={() => (transform.op = op)}>{op}</button
+						>
+					{/each}
+				</div>
+				{#if transform.op === 'trim'}
+					<label class="field"
+						><span>start ms</span><input
+							type="number"
+							min="0"
+							bind:value={transform.startMs}
+						/></label
+					>
+					<label class="field"
+						><span>end ms</span><input type="number" min="0" bind:value={transform.endMs} /></label
+					>
+				{:else if transform.op === 'normalize'}
+					<div class="seg">
+						<button
+							class="segbtn"
+							class:on={transform.mode === 'peak'}
+							type="button"
+							onclick={() => (transform.mode = 'peak')}>peak</button
+						>
+						<button
+							class="segbtn"
+							class:on={transform.mode === 'rms'}
+							type="button"
+							onclick={() => (transform.mode = 'rms')}>rms</button
+						>
+					</div>
+				{:else if transform.op === 'gain'}
+					<label class="field"
+						><span>dB</span><input type="number" step="0.1" bind:value={transform.db} /></label
+					>
+				{:else if transform.op === 'fade'}
+					<label class="field"
+						><span>fade in ms</span><input
+							type="number"
+							min="0"
+							bind:value={transform.inMs}
+						/></label
+					>
+					<label class="field"
+						><span>fade out ms</span><input
+							type="number"
+							min="0"
+							bind:value={transform.outMs}
+						/></label
+					>
+				{/if}
+			</div>
+
+			<div class="section">
+				<span class="label">output</span>
+				<label class="field">
+					<span>bit depth</span>
+					<select bind:value={transform.bitsPerSample}>
+						<option value={16}>16-bit</option>
+						<option value={24}>24-bit</option>
+					</select>
+				</label>
+			</div>
+
+			<button
+				class="tbtn"
+				type="button"
+				disabled={transform.running || !transform.sourcePath}
+				onclick={() => void applyTransform()}
+				>{transform.running ? `transforming… ${transform.phase}` : 'apply'}</button
+			>
+
+			{#if transform.error}
+				<p class="error">{transform.error}</p>
+			{/if}
+
+			{#if transform.lastMeta}
+				<div class="result">
+					<div class="muted">derived: <b>{transform.lastMeta.name}</b></div>
+					<div class="row">
+						<button class="tbtn" type="button" onclick={previewLast}>preview</button>
+						<button class="tbtn" type="button" onclick={() => void copyName()}>copy name</button>
+					</div>
+				</div>
 			{/if}
 		</aside>
 	{/if}
@@ -673,5 +839,47 @@ d1 $ s "bd sn:1 ~ hh"
 
 	.error {
 		color: var(--sw-red);
+	}
+
+	.transform-panel {
+		position: fixed;
+		top: 2.7rem;
+		right: 0;
+		bottom: 0;
+		width: 22rem;
+		max-width: 92vw;
+		background: var(--sw-surface);
+		z-index: 10;
+	}
+
+	.transform-panel .row {
+		display: flex;
+		gap: 0.4rem;
+	}
+
+	.source {
+		display: block;
+		max-width: 100%;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.field input {
+		width: 100%;
+		font: inherit;
+		font-size: 0.7rem;
+		color: var(--sw-text);
+		background: var(--sw-gutter);
+		border: 1px solid var(--sw-border);
+		border-radius: 4px;
+		padding: 0.2rem 0.3rem;
+	}
+
+	.result {
+		margin-top: 0.6rem;
+		display: flex;
+		flex-direction: column;
+		gap: 0.4rem;
 	}
 </style>
