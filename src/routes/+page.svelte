@@ -23,6 +23,14 @@
 	} from '$lib/diagnostics.svelte';
 	import { session } from '$lib/session.svelte';
 	import {
+		exporter,
+		formatElapsed,
+		openExport,
+		startExport,
+		stopExport,
+		type ExportFormat
+	} from '$lib/export.svelte';
+	import {
 		applyTransform,
 		copyName,
 		loadDirtGroups,
@@ -36,6 +44,13 @@
 
 	const ENGINE_CHOICES: EngineChoice[] = ['auto', 'superdirt', 'headless'];
 	const OPS: TransformOp[] = ['reverse', 'trim', 'normalize', 'gain', 'fade'];
+	const EXPORT_FORMATS: ExportFormat[] = ['int16', 'int24', 'float', 'flac'];
+	const EXPORT_DURATIONS = [
+		{ label: 'manual', value: -1 },
+		{ label: '10 s', value: 10 },
+		{ label: '30 s', value: 30 },
+		{ label: '60 s', value: 60 }
+	];
 
 	let buffer = $state(`-- tIDE — live GHCi session with SuperDirt (M2)
 -- Cmd/Ctrl+Enter evaluates the current line or selection.
@@ -243,8 +258,20 @@ d1 $ s "bd sn:1 ~ hh"
 		<button
 			class="tbtn"
 			type="button"
-			onclick={() => (transform.open = !transform.open)}
+			onclick={() => {
+				transform.open = !transform.open;
+				if (transform.open) exporter.open = false;
+			}}
 			aria-pressed={transform.open}>{transform.open ? 'hide transform' : 'transform'}</button
+		>
+		<button
+			class="tbtn"
+			type="button"
+			onclick={() => {
+				exporter.open = !exporter.open;
+				if (exporter.open) transform.open = false;
+			}}
+			aria-pressed={exporter.open}>{exporter.open ? 'hide export' : 'export'}</button
 		>
 	</div>
 	<span class="chip {session.state}">
@@ -399,7 +426,7 @@ d1 $ s "bd sn:1 ~ hh"
 		</aside>
 	{/if}
 	{#if transform.open}
-		<aside class="diag transform-panel" aria-label="sample transforms">
+		<aside class="diag overlay-panel" aria-label="sample transforms">
 			<div class="diag-head">
 				<strong>transforms</strong>
 				<button class="tbtn" type="button" onclick={() => (transform.open = false)}>close</button>
@@ -532,6 +559,91 @@ d1 $ s "bd sn:1 ~ hh"
 					<div class="row">
 						<button class="tbtn" type="button" onclick={previewLast}>preview</button>
 						<button class="tbtn" type="button" onclick={() => void copyName()}>copy name</button>
+					</div>
+				</div>
+			{/if}
+		</aside>
+	{/if}
+	{#if exporter.open}
+		<aside class="diag overlay-panel" aria-label="audio export">
+			<div class="diag-head">
+				<strong>export</strong>
+				<button class="tbtn" type="button" onclick={() => (exporter.open = false)}>close</button>
+			</div>
+
+			{#if !(session.engine?.engine === 'superdirt' && session.engine.status === 'live')}
+				<p class="muted">engine not live — start a SuperDirt session to record audio</p>
+			{/if}
+
+			<div class="section">
+				<span class="label">duration</span>
+				<div class="seg">
+					{#each EXPORT_DURATIONS as d (d.value)}
+						<button
+							class="segbtn"
+							class:on={exporter.durationSecs === d.value}
+							type="button"
+							disabled={exporter.recording || exporter.converting}
+							onclick={() => (exporter.durationSecs = d.value)}>{d.label}</button
+						>
+					{/each}
+				</div>
+			</div>
+
+			<div class="section">
+				<span class="label">format</span>
+				<div class="seg">
+					{#each EXPORT_FORMATS as f (f)}
+						<button
+							class="segbtn"
+							class:on={exporter.format === f}
+							type="button"
+							disabled={exporter.recording || exporter.converting}
+							onclick={() => (exporter.format = f)}>{f}</button
+						>
+					{/each}
+				</div>
+			</div>
+
+			<div class="section">
+				<span class="label">status</span>
+				<div class="export-status">
+					<span class="dot rec" style:visibility={exporter.recording ? 'visible' : 'hidden'}></span>
+					<span class="time">{formatElapsed(exporter.elapsedMs)}</span>
+					<span class="muted"
+						>{exporter.recording
+							? 'recording…'
+							: exporter.converting
+								? 'converting…'
+								: 'idle'}</span
+					>
+				</div>
+			</div>
+
+			{#if exporter.recording}
+				<button class="tbtn" type="button" onclick={() => void stopExport()}>stop</button>
+			{:else if exporter.converting}
+				<button class="tbtn" type="button" disabled>converting…</button>
+			{:else}
+				<button
+					class="tbtn"
+					type="button"
+					disabled={!(session.engine?.engine === 'superdirt' && session.engine.status === 'live')}
+					onclick={() => void startExport()}>record</button
+				>
+			{/if}
+
+			{#if exporter.error}
+				<p class="error">{exporter.error}</p>
+			{/if}
+
+			{#if exporter.path}
+				<div class="result">
+					<div class="muted source">{exporter.path}</div>
+					<div class="row">
+						<button class="tbtn" type="button" onclick={() => void openExport()}
+							>open in folder</button
+						>
 					</div>
 				</div>
 			{/if}
@@ -872,7 +984,7 @@ d1 $ s "bd sn:1 ~ hh"
 		color: var(--sw-red);
 	}
 
-	.transform-panel {
+	.overlay-panel {
 		position: fixed;
 		top: 2.7rem;
 		right: 0;
@@ -883,9 +995,26 @@ d1 $ s "bd sn:1 ~ hh"
 		z-index: 10;
 	}
 
-	.transform-panel .row {
+	.overlay-panel .row {
 		display: flex;
 		gap: 0.4rem;
+	}
+
+	.export-status {
+		display: flex;
+		align-items: center;
+		gap: 0.45rem;
+		font-family: Menlo, Monaco, Consolas, monospace;
+	}
+
+	.dot.rec {
+		background: var(--sw-red);
+		animation: pulse 0.8s infinite;
+	}
+
+	.time {
+		font-size: 0.8rem;
+		letter-spacing: 0.04em;
 	}
 
 	.source {

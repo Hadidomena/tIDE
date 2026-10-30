@@ -3,9 +3,9 @@
 tIDE is an integrated development environment for the Tidal language.
 
 **Status:** editor with Tidal highlighting, live GHCi session, SuperDirt/headless engine
-orchestration, toolchain detection + diagnostics, project open/save, and destructive sample
-transforms (reverse/trim/normalize/gain/fade, live-reloaded into the engine). Sample library import
-and pattern analysis land in later milestones.
+orchestration, toolchain detection + diagnostics, project open/save, destructive sample transforms
+(reverse/trim/normalize/gain/fade, live-reloaded into the engine), and audio export (record the live
+engine to WAV/FLAC). Sample library import and pattern analysis land in later milestones.
 
 ## Prerequisites
 
@@ -91,6 +91,20 @@ browse for any wav/aif/flac/mp3/ogg/caf), choose an operation — `reverse`, `tr
   headless/down engine they load on the next SuperDirt start.
 - Each derived sample is also registered in the local database (`samples` + `sample_transformations`).
 - **preview** plays it once; **copy name** copies the Tidal sample name.
+
+### Export
+
+The **export** button (header) opens the export panel: pick a duration (**manual**, or auto-stop
+after 10/30/60 s), a format, and press **record**. A timer and a red dot show the state; **stop**
+ends the take.
+
+- Formats: `int16` / `int24` / `float` WAV, or `flac`. FLAC records a 16-bit WAV internally and
+  converts it losslessly afterwards (the intermediate WAV is removed).
+- Files land in the app-data dir: `…/exports/tIDE-<UTC timestamp>.wav` (or `.flac`).
+- Audio is captured from SuperDirt's **master bus** (what you hear), so the engine must be **live**;
+  the record button is disabled otherwise.
+- **open in folder** reveals the finished file.
+- Recording stops cleanly on engine restart/quit, so the file is always finalized.
 
 ## Quickstart (development)
 

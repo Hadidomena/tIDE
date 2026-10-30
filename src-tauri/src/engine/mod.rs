@@ -17,6 +17,8 @@ const MARKER_PLACEHOLDER: &str = "__TIDE_MARKER__";
 const SAMPLES_PLACEHOLDER: &str = "__TIDE_SAMPLES__";
 const DERIVED_PLACEHOLDER: &str = "__TIDE_DERIVED__";
 const RELOAD_PLACEHOLDER: &str = "__TIDE_RELOAD__";
+const RECORD_PLACEHOLDER: &str = "__TIDE_RECORD__";
+const STOP_RECORD_PLACEHOLDER: &str = "__TIDE_STOPRECORD__";
 const IN_DEVICE_PLACEHOLDER: &str = "__TIDE_IN_DEVICE__";
 const IN_CHANNELS_PLACEHOLDER: &str = "__TIDE_IN_CHANNELS__";
 const OUT_DEVICE_PLACEHOLDER: &str = "__TIDE_OUT_DEVICE__";
@@ -111,6 +113,7 @@ struct Running {
     engine: Engine,
     child: Arc<Mutex<Child>>,
     lines: Receiver<String>,
+    stop_flag: PathBuf,
 }
 
 pub struct EngineLauncher {
@@ -327,7 +330,11 @@ fn start_superdirt(
     let samples = crate::toolchain::find_dirt_samples();
     let derived = crate::library::transform::derived_dir(data_dir);
     let reload_flag = crate::library::transform::reload_flag_path(data_dir);
+    let record_flag = crate::export::record_flag_path(data_dir);
+    let stop_flag = crate::export::stop_flag_path(data_dir);
     let _ = std::fs::remove_file(&reload_flag);
+    let _ = std::fs::remove_file(&record_flag);
+    let _ = std::fs::remove_file(&stop_flag);
     let script = engine_dir.join("boot-superdirt.scd");
     if let Err(e) = std::fs::write(
         &script,
@@ -336,6 +343,8 @@ fn start_superdirt(
             samples.as_deref(),
             &derived,
             &reload_flag,
+            &record_flag,
+            &stop_flag,
             &devices,
         ),
     ) {
@@ -423,6 +432,7 @@ fn start_superdirt(
                         engine: Engine::SuperDirt,
                         child,
                         lines,
+                        stop_flag,
                     });
                 }
             } else if let Some(reason) = content.strip_prefix("failed:") {
@@ -462,6 +472,8 @@ fn shutdown(
     status: &Arc<Mutex<EngineStatus>>,
     why: &str,
 ) {
+    let _ = std::fs::write(&run.stop_flag, "stop");
+    thread::sleep(Duration::from_millis(650));
     kill_group(&run.child);
     drain(&run, evt);
     emit_engine(evt, run.engine, EngineState::Down, why);
@@ -587,6 +599,8 @@ fn render_boot_script(
     samples: Option<&Path>,
     derived: &Path,
     reload_flag: &Path,
+    record_flag: &Path,
+    stop_flag: &Path,
     devices: &AudioDevices,
 ) -> String {
     let samples = samples
@@ -594,6 +608,8 @@ fn render_boot_script(
         .unwrap_or_default();
     let derived = escape_sc_string(&derived.display().to_string());
     let reload_flag = escape_sc_string(&reload_flag.display().to_string());
+    let record_flag = escape_sc_string(&record_flag.display().to_string());
+    let stop_flag = escape_sc_string(&stop_flag.display().to_string());
     let (input, input_channels) = match &devices.input {
         AudioInput::Off => (String::new(), "0"),
         AudioInput::SystemDefault => (String::new(), "2"),
@@ -612,6 +628,8 @@ fn render_boot_script(
         .replace(SAMPLES_PLACEHOLDER, &samples)
         .replace(DERIVED_PLACEHOLDER, &derived)
         .replace(RELOAD_PLACEHOLDER, &reload_flag)
+        .replace(RECORD_PLACEHOLDER, &record_flag)
+        .replace(STOP_RECORD_PLACEHOLDER, &stop_flag)
         .replace(IN_DEVICE_PLACEHOLDER, &input)
         .replace(IN_CHANNELS_PLACEHOLDER, input_channels)
         .replace(OUT_DEVICE_PLACEHOLDER, &output)
@@ -632,6 +650,8 @@ mod tests {
             Some(Path::new(r#"C:\Users\me\samples"#)),
             Path::new(r#"C:\Users\me\derived"#),
             Path::new(r#"C:\Users\me\reload.txt"#),
+            Path::new(r#"C:\Users\me\record.txt"#),
+            Path::new(r#"C:\Users\me\stoprecord.txt"#),
             &AudioDevices {
                 input: AudioInput::Device("Mic \"Pro\"".to_string()),
                 output: Some("Speakers".to_string()),
@@ -641,6 +661,8 @@ mod tests {
         assert!(!script.contains(SAMPLES_PLACEHOLDER));
         assert!(!script.contains(DERIVED_PLACEHOLDER));
         assert!(!script.contains(RELOAD_PLACEHOLDER));
+        assert!(!script.contains(RECORD_PLACEHOLDER));
+        assert!(!script.contains(STOP_RECORD_PLACEHOLDER));
         assert!(!script.contains(IN_DEVICE_PLACEHOLDER));
         assert!(!script.contains(IN_CHANNELS_PLACEHOLDER));
         assert!(!script.contains(OUT_DEVICE_PLACEHOLDER));
@@ -648,6 +670,8 @@ mod tests {
         assert!(script.contains(r#""C:\\Users\\me\\samples""#));
         assert!(script.contains(r#""C:\\Users\\me\\derived""#));
         assert!(script.contains(r#""C:\\Users\\me\\reload.txt""#));
+        assert!(script.contains(r#""C:\\Users\\me\\record.txt""#));
+        assert!(script.contains(r#""C:\\Users\\me\\stoprecord.txt""#));
         assert!(script.contains("SuperDirt(2, s)"));
         assert!(script.contains("var inDevice = \"Mic \\\"Pro\\\"\";"));
         assert!(script.contains("var inChannels = 2;"));
@@ -668,17 +692,26 @@ mod tests {
         assert!(script.contains("loadSoundFiles(derived ++ \"/*\")"));
         assert!(script.contains("File.delete(reloadFlag)"));
         assert!(script.contains("samples reloaded"));
+        assert!(script.contains("File.exists(recordFlag)"));
+        assert!(script.contains("s.record(outPath, 0, 2, nil, duration)"));
+        assert!(script.contains("recSampleFormat"));
+        assert!(script.contains("File.exists(stopFlag)"));
+        assert!(script.contains("s.stopRecording"));
 
         let headless_script = render_boot_script(
             Path::new("/tmp/ready.txt"),
             None,
             Path::new("/tmp/derived"),
             Path::new("/tmp/reload.txt"),
+            Path::new("/tmp/record.txt"),
+            Path::new("/tmp/stoprecord.txt"),
             &AudioDevices::default(),
         );
         assert!(!headless_script.contains(SAMPLES_PLACEHOLDER));
         assert!(!headless_script.contains(DERIVED_PLACEHOLDER));
         assert!(!headless_script.contains(RELOAD_PLACEHOLDER));
+        assert!(!headless_script.contains(RECORD_PLACEHOLDER));
+        assert!(!headless_script.contains(STOP_RECORD_PLACEHOLDER));
         assert!(headless_script.contains("no Dirt-Samples directory configured"));
         assert!(headless_script.contains("var inDevice = \"\";"));
         assert!(headless_script.contains("var inChannels = 0;"));
@@ -693,6 +726,8 @@ mod tests {
                 None,
                 Path::new("/tmp/derived"),
                 Path::new("/tmp/reload.txt"),
+                Path::new("/tmp/record.txt"),
+                Path::new("/tmp/stoprecord.txt"),
                 &AudioDevices {
                     input,
                     output: None,
@@ -919,6 +954,64 @@ mod tests {
         assert!(reloaded, "engine never reported 'samples reloaded'");
         assert!(!flag.exists(), "reload flag was not consumed by the engine");
 
+        launcher.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[ignore = "requires SuperCollider (sclang) — boots a real engine and records a WAV"]
+    fn superdirt_export_records_a_file() {
+        use crate::export;
+
+        let (launcher, rx) = EngineLauncher::for_test();
+        let dir = std::env::temp_dir().join(format!(
+            "tide-engine-export-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        launcher
+            .start(
+                Engine::SuperDirt,
+                dir.clone(),
+                None,
+                AudioDevices::default(),
+            )
+            .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(90);
+        let mut live = false;
+        let mut log = String::new();
+        while Instant::now() < deadline && !live {
+            match rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(SessionEvent::Output { text, .. }) => log.push_str(&text),
+                Ok(SessionEvent::Engine {
+                    status: EngineState::Live,
+                    ..
+                }) => live = true,
+                _ => {}
+            }
+        }
+        assert!(live, "engine never reached Live\nengine output:\n{log}");
+
+        let status = export::start_in(&dir, Some(1.5), Some("int16".to_string())).unwrap();
+        assert!(status.recording);
+        thread::sleep(Duration::from_secs(3));
+
+        let decoded = crate::library::dsp::decode(Path::new(&status.path))
+            .expect("exported wav should decode");
+        assert!(decoded.frames() > 0, "exported wav has no frames");
+        assert!(
+            decoded.duration_ms() >= 1000,
+            "exported wav too short: {} ms",
+            decoded.duration_ms()
+        );
+
+        let _ = export::stop_in(&dir);
         launcher.stop();
         let _ = std::fs::remove_dir_all(&dir);
     }

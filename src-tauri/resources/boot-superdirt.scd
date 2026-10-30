@@ -3,6 +3,8 @@ var marker = "__TIDE_MARKER__";
 var samples = "__TIDE_SAMPLES__";
 var derived = "__TIDE_DERIVED__";
 var reloadFlag = "__TIDE_RELOAD__";
+var recordFlag = "__TIDE_RECORD__";
+var stopFlag = "__TIDE_STOPRECORD__";
 var inDevice = "__TIDE_IN_DEVICE__";
 var inChannels = __TIDE_IN_CHANNELS__;
 var outDevice = "__TIDE_OUT_DEVICE__";
@@ -76,6 +78,32 @@ s.waitForBoot(
 							~tideDirt.loadSoundFiles(derived ++ "/*");
 							File.delete(reloadFlag);
 							"tIDE: samples reloaded".postln;
+						};
+					};
+				};
+			};
+			if (recordFlag.size > 0 and: { stopFlag.size > 0 }) {
+				fork {
+					var recording = false;
+					loop {
+						0.5.wait;
+						if (File.exists(recordFlag)) {
+							var lines = File(recordFlag, "r").readAllString.split(Char.nl);
+							var outPath = if (lines.size > 0) { lines[0].stripWhiteSpace } { "" };
+							if (outPath.size > 0) {
+								var durLine = if (lines.size > 1) { lines[1].stripWhiteSpace } { "" };
+								var fmtLine = if (lines.size > 2) { lines[2].stripWhiteSpace } { "" };
+								var duration = if (durLine.size > 0) { durLine.asFloat } { -1 };
+								var format = if (fmtLine.size > 0) { fmtLine } { "float" };
+								s.recorder.recSampleFormat = format;
+								s.record(outPath, 0, 2, nil, duration);
+								recording = true;
+							};
+							File.delete(recordFlag);
+						};
+						if (File.exists(stopFlag)) {
+							if (recording) { s.stopRecording; recording = false; };
+							File.delete(stopFlag);
 						};
 					};
 				};
