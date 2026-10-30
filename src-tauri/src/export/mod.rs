@@ -166,17 +166,27 @@ fn wait_for_wav(wav_path: &str) -> Result<dsp::Decoded, String> {
     if !path.is_file() {
         return Err(format!("recording not found: {wav_path}"));
     }
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let interval = Duration::from_millis(300);
+    let mut last_frames: Option<usize> = None;
     loop {
-        let last = match dsp::decode(path) {
-            Ok(decoded) if decoded.frames() > 0 => return Ok(decoded),
-            Ok(_) => "no frames".to_string(),
-            Err(e) => e,
-        };
-        if Instant::now() >= deadline {
-            return Err(format!("recording did not finalize in time ({last})"));
+        let decoded = dsp::decode(path).ok().filter(|d| d.frames() > 0);
+        match decoded {
+            Some(decoded) => {
+                let frames = decoded.frames();
+                if last_frames == Some(frames) {
+                    return Ok(decoded);
+                }
+                last_frames = Some(frames);
+            }
+            None => last_frames = None,
         }
-        std::thread::sleep(Duration::from_millis(150));
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "recording did not stop growing in time ({wav_path})"
+            ));
+        }
+        std::thread::sleep(interval);
     }
 }
 
@@ -392,6 +402,49 @@ mod tests {
     fn finalize_missing_file_errors() {
         let data = temp_dir("missing");
         assert!(finalize_in(&data, "/nonexistent/tide-take.wav", "flac", false).is_err());
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn wait_for_wav_does_not_accept_a_still_growing_file() {
+        let data = temp_dir("growing");
+        let wav = data.join("growing.wav");
+
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        bytes.extend_from_slice(b"WAVE");
+        bytes.extend_from_slice(b"fmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        bytes.extend_from_slice(&1u16.to_le_bytes()); // mono
+        bytes.extend_from_slice(&44100u32.to_le_bytes());
+        bytes.extend_from_slice(&(44100u32 * 2).to_le_bytes());
+        bytes.extend_from_slice(&2u16.to_le_bytes());
+        bytes.extend_from_slice(&16u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        bytes.extend_from_slice(&vec![0u8; 1000 * 2]);
+        std::fs::write(&wav, &bytes).unwrap();
+
+        let appending = wav.clone();
+        let appender = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&appending)
+                .unwrap();
+            f.write_all(&vec![0u8; 500 * 2]).unwrap();
+        });
+
+        let decoded = wait_for_wav(wav.to_str().unwrap()).unwrap();
+        appender.join().unwrap();
+        assert_eq!(
+            decoded.frames(),
+            1500,
+            "must wait for the grown file, not return the partial 1000-frame read"
+        );
         let _ = std::fs::remove_dir_all(&data);
     }
 }
