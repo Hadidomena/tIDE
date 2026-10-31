@@ -256,6 +256,18 @@ pub fn detect(source: &str, tokens: &[Token], min_tokens: usize, max_tokens: usi
         .collect()
 }
 
+#[tauri::command]
+pub fn analyze_patterns(
+    code: String,
+    min_tokens: Option<usize>,
+    max_tokens: Option<usize>,
+) -> Vec<Repeat> {
+    let min = min_tokens.unwrap_or(6).clamp(2, 128);
+    let max = max_tokens.unwrap_or(64).clamp(min, 128);
+    let tokens = tokenize(&code);
+    detect(&code, &tokens, min, max)
+}
+
 fn push_token(
     tokens: &mut Vec<Token>,
     code: &str,
@@ -410,5 +422,15 @@ mod tests {
         let repeats = detect(code, &tokens, 3, 5);
         assert_eq!(repeats.len(), 1);
         assert_eq!(repeats[0].token_len, 5);
+    }
+
+    #[test]
+    fn analyze_patterns_clamps_the_ngram_range() {
+        let code = "d1 $ s \"bd\"\nd2 $ s \"bd\"";
+        let repeats = analyze_patterns(code.to_string(), Some(0), Some(0));
+        assert_eq!(repeats.len(), 1);
+        assert_eq!(repeats[0].token_len, 2);
+        assert_eq!(repeats[0].occurrences, 2);
+        assert!(!repeats[0].hash.is_empty());
     }
 }

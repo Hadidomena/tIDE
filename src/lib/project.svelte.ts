@@ -11,6 +11,7 @@ export interface OpenedFile {
 const TIDAL_FILTERS = [{ name: 'Tidal', extensions: ['tidal', 'hs'] }];
 
 export const project = $state({
+	id: null as number | null,
 	path: '',
 	title: 'untitled',
 	hasLast: false
@@ -33,8 +34,9 @@ async function registerProject(path: string) {
 			 RETURNING id`,
 			[file, dir, file, now]
 		);
-		const id = rows[0]?.id;
-		if (id !== undefined) {
+		const id = rows[0]?.id ?? null;
+		project.id = id;
+		if (id !== null) {
 			await setSetting('last_project_id', String(id));
 			project.hasLast = true;
 		}
@@ -70,8 +72,8 @@ export async function saveProject(content: string, saveAs = false): Promise<stri
 export async function openLastProject(): Promise<OpenedFile | null> {
 	try {
 		const d = await getDb();
-		const rows = await d.select<{ dir_path: string; entry_file: string }[]>(
-			`SELECT p.dir_path, p.entry_file
+		const rows = await d.select<{ id: number; dir_path: string; entry_file: string }[]>(
+			`SELECT p.id, p.dir_path, p.entry_file
 			 FROM projects p
 			 JOIN settings s ON s.key = 'last_project_id' AND s.value = CAST(p.id AS TEXT)
 			 LIMIT 1`
@@ -81,6 +83,7 @@ export async function openLastProject(): Promise<OpenedFile | null> {
 		const file = await invoke<OpenedFile>('project_open', {
 			path: `${hit.dir_path}/${hit.entry_file}`
 		});
+		project.id = hit.id;
 		project.path = file.path;
 		project.title = hit.entry_file;
 		return file;
