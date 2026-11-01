@@ -21,21 +21,30 @@ export interface RepeatItem extends Repeat {
 	key: string;
 }
 
+export interface RepeatFocus {
+	fromLine: number;
+	toLine: number;
+	seq: number;
+}
+
 export const repeats = $state({
+	open: false,
 	items: [] as RepeatItem[],
 	analyzing: false,
 	error: '',
 	selectedKey: '',
-	focusSpan: null as RepeatSpan | null
+	focus: null as RepeatFocus | null
 });
 
 let generation = 0;
+let debounce: ReturnType<typeof setTimeout> | undefined;
+let focusSeq = 0;
 
 async function ngramRange(): Promise<{ min: number; max: number }> {
 	const min = Number.parseInt((await getSetting('ngram_min').catch(() => null)) ?? '', 10);
 	const max = Number.parseInt((await getSetting('ngram_max').catch(() => null)) ?? '', 10);
 	return {
-		min: Number.isFinite(min) ? min : 6,
+		min: Number.isFinite(min) ? min : 3,
 		max: Number.isFinite(max) ? max : 64
 	};
 }
@@ -62,6 +71,14 @@ export async function analyze(code: string) {
 	} finally {
 		if (gen === generation) repeats.analyzing = false;
 	}
+}
+
+export function scheduleAnalyze(code: string, delayMs = 600) {
+	if (debounce) clearTimeout(debounce);
+	debounce = setTimeout(() => {
+		debounce = undefined;
+		void analyze(code);
+	}, delayMs);
 }
 
 async function persist(items: RepeatItem[]) {
@@ -96,13 +113,18 @@ async function persist(items: RepeatItem[]) {
 export function selectRepeat(key: string) {
 	const item = repeats.items.find((r) => r.key === key);
 	repeats.selectedKey = key;
-	repeats.focusSpan = item?.spans[0] ?? null;
+	const span = item?.spans[0];
+	repeats.focus = span ? { fromLine: span.startLine, toLine: span.endLine, seq: ++focusSeq } : null;
 }
 
 export function clearRepeats() {
+	if (debounce) {
+		clearTimeout(debounce);
+		debounce = undefined;
+	}
 	generation += 1;
 	repeats.items = [];
 	repeats.selectedKey = '';
-	repeats.focusSpan = null;
+	repeats.focus = null;
 	repeats.analyzing = false;
 }

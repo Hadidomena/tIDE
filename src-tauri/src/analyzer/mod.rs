@@ -169,8 +169,8 @@ pub fn tokenize(code: &str) -> Vec<Token> {
 
 pub fn detect(source: &str, tokens: &[Token], min_tokens: usize, max_tokens: usize) -> Vec<Repeat> {
     let n = tokens.len();
-    let k = min_tokens.max(2);
-    let max_len = max_tokens.max(k);
+    let k = min_tokens.clamp(2, 3);
+    let max_len = max_tokens.max(min_tokens).max(k);
     if n < k {
         return Vec::new();
     }
@@ -203,7 +203,16 @@ pub fn detect(source: &str, tokens: &[Token], min_tokens: usize, max_tokens: usi
         }
 
         let starts: Vec<usize> = positions.iter().map(|&p| p - left).collect();
-        let len = (k + left + right).min(max_len);
+        let min_gap = positions
+            .windows(2)
+            .map(|pair| pair[1] - pair[0])
+            .min()
+            .unwrap_or(usize::MAX);
+        let tail = n - *positions.last().expect("groups are non-empty");
+        let len = (k + left + right).min(min_gap).min(tail).min(max_len);
+        if len < min_tokens {
+            continue;
+        }
         candidates.push((starts, len));
     }
 
@@ -262,7 +271,7 @@ pub fn analyze_patterns(
     min_tokens: Option<usize>,
     max_tokens: Option<usize>,
 ) -> Vec<Repeat> {
-    let min = min_tokens.unwrap_or(6).clamp(2, 128);
+    let min = min_tokens.unwrap_or(3).clamp(2, 128);
     let max = max_tokens.unwrap_or(64).clamp(min, 128);
     let tokens = tokenize(&code);
     detect(&code, &tokens, min, max)
@@ -422,6 +431,54 @@ mod tests {
         let repeats = detect(code, &tokens, 3, 5);
         assert_eq!(repeats.len(), 1);
         assert_eq!(repeats[0].token_len, 5);
+    }
+
+    #[test]
+    fn detect_reports_multiple_disjoint_blocks() {
+        let code = "d1 $ s \"bd sn\" # gain 0.8\nd2 $ s \"bd sn\" # gain 0.8\nd3 $ s \"hh*4\" # pan 0.2\nd4 $ s \"hh*4\" # pan 0.2";
+        let repeats = detect(code, &tokenize(code), 6, 64);
+        assert_eq!(
+            repeats.len(),
+            2,
+            "both repeated statements must be reported"
+        );
+        assert!(repeats.iter().any(|r| r.code.contains("bd sn")));
+        assert!(repeats.iter().any(|r| r.code.contains("hh*4")));
+        for repeat in &repeats {
+            assert_eq!(repeat.occurrences, 2);
+            let mut spans = repeat.spans.clone();
+            spans.sort_by_key(|s| s.start_byte);
+            for pair in spans.windows(2) {
+                assert!(
+                    pair[0].end_byte <= pair[1].start_byte,
+                    "occurrences must not overlap: {spans:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn detect_does_not_bleed_into_the_next_occurrence() {
+        let code = "a b c a b c a b c";
+        let repeats = detect(code, &tokenize(code), 2, 64);
+        assert_eq!(repeats.len(), 1);
+        assert_eq!(repeats[0].token_len, 3);
+        assert_eq!(repeats[0].occurrences, 3);
+    }
+
+    #[test]
+    fn detect_counts_all_four_occurrences_of_a_short_line() {
+        let code = "d1 $ s \"bd sn:1 ~ hh\"\nd2 $ s \"bd sn:1 ~ hh\"\nd3 $ s \"bd sn:1 ~ hh\"\nd4 $ s \"bd sn:1 ~ hh\"\n\nd5 $ s \"bd sn ~ hh\"\nd6 $ s \"bd sn ~ hh\"\nd7 $ s \"bd sn ~ hh\"\nd8 $ s \"bd sn ~ hh\"";
+        let repeats = detect(code, &tokenize(code), 3, 64);
+        assert_eq!(
+            repeats.len(),
+            2,
+            "two distinct lines, each repeated four times"
+        );
+        assert!(repeats.iter().all(|r| r.occurrences == 4));
+        assert!(repeats.iter().all(|r| r.token_len == 3));
+        assert!(repeats.iter().any(|r| r.code.contains("sn:1")));
+        assert!(repeats.iter().any(|r| r.code.contains("sn ~")));
     }
 
     #[test]

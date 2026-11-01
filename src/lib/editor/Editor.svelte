@@ -10,9 +10,23 @@
 	import { tidalCompletion } from './vocabulary';
 	import { tidalLanguage } from './tidal-mode';
 
+	interface RepeatSpanInput {
+		fromLine: number;
+		toLine: number;
+		selected?: boolean;
+	}
+
+	interface FocusSpan {
+		fromLine: number;
+		toLine: number;
+		seq: number;
+	}
+
 	interface Props {
 		content?: string;
 		errorLine?: number | null;
+		repeatSpans?: RepeatSpanInput[];
+		focus?: FocusSpan | null;
 		onEval?: (code: string, line: number) => void;
 		onRunAll?: (code: string) => void;
 		onHush?: () => void;
@@ -21,6 +35,8 @@
 	let {
 		content = $bindable(''),
 		errorLine = null,
+		repeatSpans = [],
+		focus = null,
 		onEval = () => {},
 		onRunAll = () => {},
 		onHush = () => {}
@@ -102,6 +118,33 @@
 		provide: (field) => EditorView.decorations.from(field)
 	});
 
+	const setRepeats = StateEffect.define<RepeatSpanInput[] | null>();
+
+	const repeatMark = Decoration.mark({ class: 'cm-repeat-mark' });
+	const repeatSelectedMark = Decoration.mark({ class: 'cm-repeat-mark cm-repeat-selected' });
+
+	const repeatsField = StateField.define<DecorationSet>({
+		create: () => Decoration.none,
+		update(decorations, tr) {
+			let next = decorations.map(tr.changes);
+			for (const effect of tr.effects) {
+				if (!effect.is(setRepeats)) continue;
+				if (!effect.value || effect.value.length === 0) return Decoration.none;
+				const marks = effect.value.flatMap((span) => {
+					const doc = tr.state.doc;
+					const fromLine = Math.min(Math.max(span.fromLine, 1), doc.lines);
+					const toLine = Math.min(Math.max(span.toLine, fromLine), doc.lines);
+					const from = doc.line(fromLine).from;
+					const to = doc.line(toLine).to;
+					return [(span.selected ? repeatSelectedMark : repeatMark).range(from, to)];
+				});
+				next = Decoration.set(marks, true);
+			}
+			return next;
+		},
+		provide: (field) => EditorView.decorations.from(field)
+	});
+
 	$effect(() => {
 		if (!host) return;
 		view = new EditorView({
@@ -115,6 +158,7 @@
 					syntaxHighlighting(synthwaveHighlight),
 					EditorView.lineWrapping,
 					errorLineField,
+					repeatsField,
 					Prec.high(
 						keymap.of([
 							{
@@ -164,6 +208,25 @@
 
 	$effect(() => {
 		if (!view) return;
+		view.dispatch({ effects: setRepeats.of(repeatSpans.length ? repeatSpans : null) });
+	});
+
+	$effect(() => {
+		if (!view || !focus) return;
+		const doc = view.state.doc;
+		const fromLine = Math.min(Math.max(focus.fromLine, 1), doc.lines);
+		const toLine = Math.min(Math.max(focus.toLine, fromLine), doc.lines);
+		const from = doc.line(fromLine).from;
+		const to = doc.line(toLine).to;
+		view.dispatch({
+			selection: { anchor: from, head: to },
+			effects: EditorView.scrollIntoView(from, { y: 'center' })
+		});
+		view.focus();
+	});
+
+	$effect(() => {
+		if (!view) return;
 		const current = view.state.doc.toString();
 		if (content !== current) {
 			view.dispatch({ changes: { from: 0, to: current.length, insert: content } });
@@ -198,6 +261,15 @@
 
 	:global(.editor-host .cm-error-line) {
 		background: color-mix(in srgb, var(--sw-red) 15%, transparent);
+	}
+
+	:global(.editor-host .cm-repeat-mark) {
+		background: color-mix(in srgb, var(--sw-blue) 12%, transparent);
+		border-bottom: 1px dashed color-mix(in srgb, var(--sw-blue) 40%, transparent);
+	}
+
+	:global(.editor-host .cm-repeat-mark.cm-repeat-selected) {
+		background: color-mix(in srgb, var(--sw-blue) 26%, transparent);
 	}
 
 	:global(.cm-tooltip.cm-tooltip-autocomplete) {
