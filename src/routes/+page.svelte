@@ -41,6 +41,15 @@
 		transform,
 		type TransformOp
 	} from '$lib/transform.svelte';
+	import {
+		deleteSample,
+		formatDuration,
+		importSamples,
+		library,
+		previewSample,
+		transformSample,
+		toggleLibrary
+	} from '$lib/library.svelte';
 
 	const ENGINE_CHOICES: EngineChoice[] = ['auto', 'superdirt', 'headless'];
 	const OPS: TransformOp[] = ['reverse', 'trim', 'normalize', 'gain', 'fade'];
@@ -255,6 +264,9 @@ d1 $ s "bd sn:1 ~ hh"
 		<button class="tbtn" type="button" onclick={toggleDiagnostics} aria-pressed={diagnostics.open}
 			>{diagnostics.open ? 'hide diag' : 'diagnostics'}</button
 		>
+		<button class="tbtn" type="button" onclick={toggleLibrary} aria-pressed={library.open}
+			>{library.open ? 'hide library' : 'library'}</button
+		>
 		<button
 			class="tbtn"
 			type="button"
@@ -262,6 +274,7 @@ d1 $ s "bd sn:1 ~ hh"
 				transform.open = !transform.open;
 				if (transform.open) {
 					exporter.open = false;
+					library.open = false;
 				}
 			}}
 			aria-pressed={transform.open}>{transform.open ? 'hide transform' : 'transform'}</button
@@ -273,6 +286,7 @@ d1 $ s "bd sn:1 ~ hh"
 				exporter.open = !exporter.open;
 				if (exporter.open) {
 					transform.open = false;
+					library.open = false;
 				}
 			}}
 			aria-pressed={exporter.open}>{exporter.open ? 'hide export' : 'export'}</button
@@ -650,6 +664,98 @@ d1 $ s "bd sn:1 ~ hh"
 						>
 					</div>
 				</div>
+			{/if}
+		</aside>
+	{/if}
+	{#if library.open}
+		<aside class="diag overlay-panel" aria-label="sample and pattern library">
+			<div class="diag-head">
+				<strong>library</strong>
+				<button class="tbtn" type="button" onclick={() => (library.open = false)}>close</button>
+			</div>
+
+			<div class="seg">
+				<button
+					class="segbtn"
+					class:on={library.category === 'samples'}
+					type="button"
+					onclick={() => (library.category = 'samples')}>samples</button
+				>
+				<button
+					class="segbtn"
+					class:on={library.category === 'patterns'}
+					type="button"
+					onclick={() => (library.category = 'patterns')}>patterns</button
+				>
+			</div>
+
+			{#if library.category === 'samples'}
+				<div class="section">
+					<button
+						class="tbtn"
+						type="button"
+						disabled={library.importing}
+						onclick={() => void importSamples()}
+						>{library.importing ? 'importing…' : 'import audio…'}</button
+					>
+					{#if !(session.engine?.engine === 'superdirt' && session.engine.status === 'live')}
+						<p class="muted">engine not live — imported samples load on the next engine start</p>
+					{/if}
+				</div>
+
+				{#if library.samples.length === 0 && !library.loading}
+					<p class="muted">no samples yet — import audio or transform a source</p>
+				{/if}
+
+				<div class="lib-list">
+					{#each library.samples as sample (sample.id)}
+						<div class="lib-row">
+							<div class="lib-main">
+								<span class="lib-name">{sample.name}</span>
+								<span class="lib-meta">
+									{formatDuration(sample.durationMs)} · {sample.sourceType}
+								</span>
+							</div>
+							<div class="row">
+								<button
+									class="tbtn"
+									type="button"
+									disabled={session.state !== 'ready'}
+									onclick={() => previewSample(sample.name)}>preview</button
+								>
+								<button class="tbtn" type="button" onclick={() => transformSample(sample)}
+									>transform</button
+								>
+								<button
+									class="tbtn"
+									type="button"
+									disabled={library.deletingId !== null}
+									onclick={() => void deleteSample(sample)}>delete</button
+								>
+							</div>
+						</div>
+					{/each}
+				</div>
+			{:else if library.patterns.length === 0 && !library.loading}
+				<p class="muted">no saved patterns yet</p>
+			{:else}
+				<div class="lib-list">
+					{#each library.patterns as pattern (pattern.id)}
+						<div class="lib-row">
+							<div class="lib-main">
+								<span class="lib-name">{pattern.title}</span>
+								<code class="lib-code">{pattern.codeContent.split('\n')[0]}</code>
+							</div>
+						</div>
+					{/each}
+				</div>
+			{/if}
+
+			{#if library.loading}
+				<p class="muted">loading…</p>
+			{/if}
+			{#if library.error}
+				<p class="error">{library.error}</p>
 			{/if}
 		</aside>
 	{/if}
@@ -1045,5 +1151,49 @@ d1 $ s "bd sn:1 ~ hh"
 		display: flex;
 		flex-direction: column;
 		gap: 0.4rem;
+	}
+
+	.lib-list {
+		display: flex;
+		flex-direction: column;
+		gap: 0.35rem;
+		margin-top: 0.5rem;
+	}
+
+	.lib-row {
+		display: flex;
+		flex-direction: column;
+		gap: 0.3rem;
+		padding: 0.35rem 0.45rem;
+		border: 1px solid color-mix(in srgb, var(--sw-pink) 22%, transparent);
+		border-radius: 6px;
+	}
+
+	.lib-main {
+		display: flex;
+		flex-direction: column;
+		gap: 0.1rem;
+		min-width: 0;
+	}
+
+	.lib-name {
+		font-weight: 600;
+		word-break: break-all;
+	}
+
+	.lib-meta {
+		font-size: 0.65rem;
+		color: var(--sw-muted);
+	}
+
+	.lib-code {
+		display: block;
+		max-width: 100%;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		font-family: Menlo, Monaco, Consolas, monospace;
+		font-size: 0.7rem;
+		color: var(--sw-blue);
 	}
 </style>
