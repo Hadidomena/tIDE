@@ -4,6 +4,7 @@ use serde::Serialize;
 
 use tauri::{AppHandle, Emitter, Manager};
 
+use super::derived_dir;
 use super::dsp::{self, NormalizeMode, Op};
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -118,10 +119,6 @@ pub async fn sample_transform(
 
 pub fn derived_name(stem: &str, op: &Op) -> String {
     sanitize(&format!("{}-{}", stem, op_suffix(op)))
-}
-
-pub fn derived_dir(data_dir: &Path) -> PathBuf {
-    data_dir.join("samples").join("derived")
 }
 
 pub fn reload_flag_path(data_dir: &Path) -> PathBuf {

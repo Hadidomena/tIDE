@@ -15,6 +15,7 @@ const READY_TIMEOUT: Duration = Duration::from_secs(120);
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
 const MARKER_PLACEHOLDER: &str = "__TIDE_MARKER__";
 const SAMPLES_PLACEHOLDER: &str = "__TIDE_SAMPLES__";
+const CUSTOM_PLACEHOLDER: &str = "__TIDE_CUSTOM__";
 const DERIVED_PLACEHOLDER: &str = "__TIDE_DERIVED__";
 const RELOAD_PLACEHOLDER: &str = "__TIDE_RELOAD__";
 const RECORD_PLACEHOLDER: &str = "__TIDE_RECORD__";
@@ -328,7 +329,8 @@ fn start_superdirt(
     let marker = engine_dir.join("ready.txt");
     let _ = std::fs::remove_file(&marker);
     let samples = crate::toolchain::find_dirt_samples();
-    let derived = crate::library::transform::derived_dir(data_dir);
+    let custom = crate::library::ensure_custom_dir(data_dir)?;
+    let derived = crate::library::derived_dir(data_dir);
     let reload_flag = crate::library::transform::reload_flag_path(data_dir);
     let record_flag = crate::export::record_flag_path(data_dir);
     let stop_flag = crate::export::stop_flag_path(data_dir);
@@ -341,6 +343,7 @@ fn start_superdirt(
         render_boot_script(
             &marker,
             samples.as_deref(),
+            &custom,
             &derived,
             &reload_flag,
             &record_flag,
@@ -594,9 +597,11 @@ fn port_held(port: u16) -> bool {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_boot_script(
     marker: &Path,
     samples: Option<&Path>,
+    custom: &Path,
     derived: &Path,
     reload_flag: &Path,
     record_flag: &Path,
@@ -606,6 +611,7 @@ fn render_boot_script(
     let samples = samples
         .map(|dir| escape_sc_string(&dir.display().to_string()))
         .unwrap_or_default();
+    let custom = escape_sc_string(&custom.display().to_string());
     let derived = escape_sc_string(&derived.display().to_string());
     let reload_flag = escape_sc_string(&reload_flag.display().to_string());
     let record_flag = escape_sc_string(&record_flag.display().to_string());
@@ -626,6 +632,7 @@ fn render_boot_script(
             &escape_sc_string(&marker.display().to_string()),
         )
         .replace(SAMPLES_PLACEHOLDER, &samples)
+        .replace(CUSTOM_PLACEHOLDER, &custom)
         .replace(DERIVED_PLACEHOLDER, &derived)
         .replace(RELOAD_PLACEHOLDER, &reload_flag)
         .replace(RECORD_PLACEHOLDER, &record_flag)
@@ -648,6 +655,7 @@ mod tests {
         let script = render_boot_script(
             Path::new(r#"C:\Users\me\"tIDE"\ready.txt"#),
             Some(Path::new(r#"C:\Users\me\samples"#)),
+            Path::new(r#"C:\Users\me\custom"#),
             Path::new(r#"C:\Users\me\derived"#),
             Path::new(r#"C:\Users\me\reload.txt"#),
             Path::new(r#"C:\Users\me\record.txt"#),
@@ -659,6 +667,7 @@ mod tests {
         );
         assert!(!script.contains(MARKER_PLACEHOLDER));
         assert!(!script.contains(SAMPLES_PLACEHOLDER));
+        assert!(!script.contains(CUSTOM_PLACEHOLDER));
         assert!(!script.contains(DERIVED_PLACEHOLDER));
         assert!(!script.contains(RELOAD_PLACEHOLDER));
         assert!(!script.contains(RECORD_PLACEHOLDER));
@@ -668,6 +677,7 @@ mod tests {
         assert!(!script.contains(OUT_DEVICE_PLACEHOLDER));
         assert!(script.contains(r#""C:\\Users\\me\\\"tIDE\"\\ready.txt""#));
         assert!(script.contains(r#""C:\\Users\\me\\samples""#));
+        assert!(script.contains(r#""C:\\Users\\me\\custom""#));
         assert!(script.contains(r#""C:\\Users\\me\\derived""#));
         assert!(script.contains(r#""C:\\Users\\me\\reload.txt""#));
         assert!(script.contains(r#""C:\\Users\\me\\record.txt""#));
@@ -689,7 +699,10 @@ mod tests {
         assert!(script.contains("numBuffers = 1024 * 256"));
         assert!(script.contains("maxNodes = 1024 * 32"));
         assert!(script.contains("File.exists(reloadFlag)"));
-        assert!(script.contains("loadSoundFiles(derived ++ \"/*\")"));
+        assert!(script.contains("loadSoundFiles(dir ++ \"/*\")"));
+        assert!(script.contains("File.exists(dir)"));
+        assert!(script.contains("loadLibrary.value(custom)"));
+        assert!(script.contains("loadLibrary.value(derived)"));
         assert!(script.contains("File.delete(reloadFlag)"));
         assert!(script.contains("samples reloaded"));
         assert!(script.contains("File.exists(recordFlag)"));
@@ -701,6 +714,7 @@ mod tests {
         let headless_script = render_boot_script(
             Path::new("/tmp/ready.txt"),
             None,
+            Path::new("/tmp/custom"),
             Path::new("/tmp/derived"),
             Path::new("/tmp/reload.txt"),
             Path::new("/tmp/record.txt"),
@@ -708,6 +722,7 @@ mod tests {
             &AudioDevices::default(),
         );
         assert!(!headless_script.contains(SAMPLES_PLACEHOLDER));
+        assert!(!headless_script.contains(CUSTOM_PLACEHOLDER));
         assert!(!headless_script.contains(DERIVED_PLACEHOLDER));
         assert!(!headless_script.contains(RELOAD_PLACEHOLDER));
         assert!(!headless_script.contains(RECORD_PLACEHOLDER));
@@ -724,6 +739,7 @@ mod tests {
             render_boot_script(
                 Path::new("/tmp/ready.txt"),
                 None,
+                Path::new("/tmp/custom"),
                 Path::new("/tmp/derived"),
                 Path::new("/tmp/reload.txt"),
                 Path::new("/tmp/record.txt"),
@@ -888,10 +904,11 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires SuperCollider (sclang) — boots a real engine and reloads derived samples"]
-    fn superdirt_reload_derived_samples() {
+    #[ignore = "requires SuperCollider (sclang) — boots a real engine and reloads the library trees"]
+    fn superdirt_reload_library_samples() {
         use crate::library::dsp::{self, Decoded};
-        use crate::library::transform::{derived_dir, reload_flag_path};
+        use crate::library::transform::reload_flag_path;
+        use crate::library::{custom_dir, derived_dir};
 
         let (launcher, rx) = EngineLauncher::for_test();
         let dir = std::env::temp_dir().join(format!(
@@ -928,15 +945,19 @@ mod tests {
         }
         assert!(live, "engine never reached Live\nengine output:\n{log}");
 
-        let name = "tide-reload-probe";
-        let out = derived_dir(&dir).join(name).join(format!("{name}.wav"));
-        std::fs::create_dir_all(out.parent().unwrap()).unwrap();
         let decoded = Decoded {
             samples: (0..441).map(|i| i as f32 / 441.0 * 0.5).collect(),
             sample_rate: 44100,
             channels: 1,
         };
-        dsp::encode_wav(&out, &decoded, 16).expect("encode derived wav");
+        for (root, name) in [
+            (derived_dir(&dir), "tide-reload-probe"),
+            (custom_dir(&dir), "tide-custom-probe"),
+        ] {
+            let out = root.join(name).join(format!("{name}.wav"));
+            std::fs::create_dir_all(out.parent().unwrap()).unwrap();
+            dsp::encode_wav(&out, &decoded, 16).expect("encode probe wav");
+        }
 
         let flag = reload_flag_path(&dir);
         std::fs::write(&flag, "reload").unwrap();
