@@ -950,14 +950,25 @@ mod tests {
             sample_rate: 44100,
             channels: 1,
         };
-        for (root, name) in [
-            (derived_dir(&dir), "tide-reload-probe"),
-            (custom_dir(&dir), "tide-custom-probe"),
-        ] {
-            let out = root.join(name).join(format!("{name}.wav"));
-            std::fs::create_dir_all(out.parent().unwrap()).unwrap();
-            dsp::encode_wav(&out, &decoded, 16).expect("encode probe wav");
-        }
+        let derived = derived_dir(&dir).join("tide-reload-probe");
+        std::fs::create_dir_all(&derived).unwrap();
+        dsp::encode_wav(&derived.join("tide-reload-probe.wav"), &decoded, 16)
+            .expect("encode derived probe");
+
+        let picked = std::env::temp_dir().join(format!(
+            "tide-import-probe-{}-{}.wav",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        dsp::encode_wav(&picked, &decoded, 16).expect("encode import probe");
+        let imported = crate::library::import::import_into(&dir, &[picked.display().to_string()])
+            .expect("import probe into custom");
+        assert_eq!(imported.len(), 1);
+        assert!(custom_dir(&dir).join(&imported[0].name).is_dir());
+        let _ = std::fs::remove_file(&picked);
 
         let flag = reload_flag_path(&dir);
         std::fs::write(&flag, "reload").unwrap();

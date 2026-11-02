@@ -6,6 +6,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use super::derived_dir;
 use super::dsp::{self, NormalizeMode, Op};
+use super::{is_audio, sanitize_name};
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -118,7 +119,7 @@ pub async fn sample_transform(
 }
 
 pub fn derived_name(stem: &str, op: &Op) -> String {
-    sanitize(&format!("{}-{}", stem, op_suffix(op)))
+    sanitize_name(&format!("{}-{}", stem, op_suffix(op)))
 }
 
 pub fn reload_flag_path(data_dir: &Path) -> PathBuf {
@@ -169,16 +170,6 @@ pub fn dirt_samples_groups() -> Result<Vec<DirtGroup>, String> {
     Ok(groups)
 }
 
-fn is_audio(path: &Path) -> bool {
-    let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
-        return false;
-    };
-    matches!(
-        ext.to_ascii_lowercase().as_str(),
-        "wav" | "aif" | "aiff" | "aifc" | "flac" | "mp3" | "ogg" | "caf"
-    )
-}
-
 fn op_name(op: &Op) -> &'static str {
     match op {
         Op::Reverse => "reverse",
@@ -214,31 +205,9 @@ fn db_token(db: f32) -> String {
     s.replace('-', "m").replace('.', "-")
 }
 
-fn sanitize(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len());
-    let mut prev_sep = false;
-    for ch in raw.chars() {
-        if ch.is_ascii_alphanumeric() || ch == '_' {
-            out.push(ch.to_ascii_lowercase());
-            prev_sep = false;
-        } else if !prev_sep {
-            out.push('-');
-            prev_sep = true;
-        }
-    }
-    out.trim_matches('-').to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn sanitize_normalizes_to_superdirt_convention() {
-        assert_eq!(sanitize("Kick 01!Snare.wav"), "kick-01-snare-wav");
-        assert_eq!(sanitize("  !!  leading/trailing -- "), "leading-trailing");
-        assert_eq!(sanitize("Already_ok-01"), "already_ok-01");
-    }
 
     #[test]
     fn derived_names_are_distinct_and_valid() {
@@ -332,18 +301,5 @@ mod tests {
         assert_eq!(db_token(-3.0), "m3");
         assert_eq!(db_token(0.5), "0-5");
         assert_eq!(db_token(-0.5), "m0-5");
-    }
-
-    #[test]
-    fn is_audio_accepts_supported_extensions() {
-        assert!(is_audio(Path::new("a.wav")));
-        assert!(is_audio(Path::new("a.FLAC")));
-        assert!(is_audio(Path::new("a.mp3")));
-        assert!(is_audio(Path::new("a.ogg")));
-        assert!(is_audio(Path::new("a.caf")));
-        assert!(is_audio(Path::new("a.aiff")));
-        assert!(!is_audio(Path::new("README.md")));
-        assert!(!is_audio(Path::new("a.txt")));
-        assert!(!is_audio(Path::new("noext")));
     }
 }
