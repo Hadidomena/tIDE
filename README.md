@@ -5,7 +5,7 @@ tIDE is an integrated development environment for the Tidal language.
 **Status:** editor with Tidal highlighting, live GHCi session, SuperDirt/headless engine
 orchestration, toolchain detection + diagnostics, project open/save, destructive sample transforms
 (reverse/trim/normalize/gain/fade, live-reloaded into the engine), and audio export (record the live
-engine to WAV/FLAC). Sample library import and pattern analysis land in later milestones.
+engine to WAV/FLAC). Sample library import and named pattern snippets land in later milestones.
 
 ## Prerequisites
 

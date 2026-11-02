@@ -41,7 +41,6 @@
 		transform,
 		type TransformOp
 	} from '$lib/transform.svelte';
-	import { clearRepeats, repeats, scheduleAnalyze, selectRepeat } from '$lib/repeats.svelte';
 
 	const ENGINE_CHOICES: EngineChoice[] = ['auto', 'superdirt', 'headless'];
 	const OPS: TransformOp[] = ['reverse', 'trim', 'normalize', 'gain', 'fade'];
@@ -52,16 +51,6 @@
 		{ label: '30 s', value: 30 },
 		{ label: '60 s', value: 60 }
 	];
-
-	const repeatSpans = $derived(
-		repeats.items.flatMap((item) =>
-			item.spans.map((span) => ({
-				fromLine: span.startLine,
-				toLine: span.endLine,
-				selected: item.key === repeats.selectedKey
-			}))
-		)
-	);
 
 	let buffer = $state(`-- tIDE — live GHCi session with SuperDirt (M2)
 -- Cmd/Ctrl+Enter evaluates the current line or selection.
@@ -95,11 +84,6 @@ d1 $ s "bd sn:1 ~ hh"
 	});
 
 	$effect(() => {
-		if (!repeats.open) return;
-		scheduleAnalyze(buffer);
-	});
-
-	$effect(() => {
 		if (diagnostics.open && !diagnostics.devicesLoaded && !diagnostics.devicesLoading) {
 			void loadDevices();
 		}
@@ -125,7 +109,6 @@ d1 $ s "bd sn:1 ~ hh"
 		try {
 			const f = await openProject();
 			if (f) {
-				clearRepeats();
 				buffer = f.content;
 				lastSaved = f.content;
 				session.notify(`opened ${f.path}`);
@@ -138,7 +121,6 @@ d1 $ s "bd sn:1 ~ hh"
 	async function doOpenLast() {
 		const f = await openLastProject();
 		if (f) {
-			clearRepeats();
 			buffer = f.content;
 			lastSaved = f.content;
 			session.notify(`reopened ${f.path}`);
@@ -280,7 +262,6 @@ d1 $ s "bd sn:1 ~ hh"
 				transform.open = !transform.open;
 				if (transform.open) {
 					exporter.open = false;
-					repeats.open = false;
 				}
 			}}
 			aria-pressed={transform.open}>{transform.open ? 'hide transform' : 'transform'}</button
@@ -292,22 +273,9 @@ d1 $ s "bd sn:1 ~ hh"
 				exporter.open = !exporter.open;
 				if (exporter.open) {
 					transform.open = false;
-					repeats.open = false;
 				}
 			}}
 			aria-pressed={exporter.open}>{exporter.open ? 'hide export' : 'export'}</button
-		>
-		<button
-			class="tbtn"
-			type="button"
-			onclick={() => {
-				repeats.open = !repeats.open;
-				if (repeats.open) {
-					transform.open = false;
-					exporter.open = false;
-				}
-			}}
-			aria-pressed={repeats.open}>{repeats.open ? 'hide repeats' : 'repeats'}</button
 		>
 	</div>
 	<span class="chip {session.state}">
@@ -328,8 +296,6 @@ d1 $ s "bd sn:1 ~ hh"
 		<Editor
 			bind:content={buffer}
 			errorLine={session.errorLine}
-			{repeatSpans}
-			focus={repeats.focus}
 			onEval={handleEval}
 			onRunAll={handleRunAll}
 			onHush={handleHush}
@@ -685,39 +651,6 @@ d1 $ s "bd sn:1 ~ hh"
 					</div>
 				</div>
 			{/if}
-		</aside>
-	{/if}
-	{#if repeats.open}
-		<aside class="diag overlay-panel" aria-label="repeated patterns">
-			<div class="diag-head">
-				<strong>repeats</strong>
-				<button class="tbtn" type="button" onclick={() => (repeats.open = false)}>close</button>
-			</div>
-
-			{#if repeats.analyzing}
-				<p class="muted">analyzing…</p>
-			{/if}
-			{#if repeats.error}
-				<p class="error">{repeats.error}</p>
-			{/if}
-			{#if !repeats.analyzing && repeats.items.length === 0 && !repeats.error}
-				<p class="muted">no repeated blocks in the buffer</p>
-			{/if}
-
-			<div class="repeat-list">
-				{#each repeats.items as item (item.key)}
-					<button
-						class="repeat-row"
-						class:on={repeats.selectedKey === item.key}
-						type="button"
-						onclick={() => selectRepeat(item.key)}
-					>
-						<span class="repeat-meta">×{item.occurrences} · L{item.spans[0]?.startLine ?? '?'}</span
-						>
-						<code class="repeat-code">{item.code.split('\n')[0]}</code>
-					</button>
-				{/each}
-			</div>
 		</aside>
 	{/if}
 </main>
@@ -1112,45 +1045,5 @@ d1 $ s "bd sn:1 ~ hh"
 		display: flex;
 		flex-direction: column;
 		gap: 0.4rem;
-	}
-
-	.repeat-list {
-		display: flex;
-		flex-direction: column;
-		gap: 0.3rem;
-	}
-
-	.repeat-row {
-		display: flex;
-		flex-direction: column;
-		align-items: flex-start;
-		gap: 0.15rem;
-		width: 100%;
-		padding: 0.3rem 0.4rem;
-		border: 1px solid var(--sw-border);
-		border-radius: 6px;
-		background: transparent;
-		color: inherit;
-		font: inherit;
-		font-size: 0.72rem;
-		text-align: left;
-		cursor: pointer;
-	}
-
-	.repeat-row.on {
-		background: color-mix(in srgb, var(--sw-blue) 18%, transparent);
-	}
-
-	.repeat-meta {
-		font-size: 0.65rem;
-		color: var(--sw-muted);
-	}
-
-	.repeat-code {
-		max-width: 100%;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-		font-family: Menlo, Monaco, Consolas, monospace;
 	}
 </style>

@@ -1,4 +1,3 @@
-pub mod analyzer;
 pub mod engine;
 pub mod export;
 pub mod library;
@@ -8,7 +7,6 @@ pub mod toolchain;
 
 use tauri_plugin_sql::{Migration, MigrationKind};
 
-use analyzer::analyze_patterns;
 use export::{export_finalize, export_start, export_stop};
 use library::transform::{dirt_samples_groups, sample_reload, sample_transform};
 use project::{project_open, project_save};
@@ -54,8 +52,7 @@ pub fn run() {
             dirt_samples_groups,
             export_start,
             export_stop,
-            export_finalize,
-            analyze_patterns
+            export_finalize
         ])
         .build(tauri::generate_context!())
         .expect("error while building tIDE")
