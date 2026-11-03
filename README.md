@@ -4,8 +4,9 @@ tIDE is an integrated development environment for the Tidal language.
 
 **Status:** editor with Tidal highlighting, live GHCi session, SuperDirt/headless engine
 orchestration, toolchain detection + diagnostics, project open/save, destructive sample transforms
-(reverse/trim/normalize/gain/fade, live-reloaded into the engine), and audio export (record the live
-engine to WAV/FLAC). Sample library import and named pattern snippets land in later milestones.
+(reverse/trim/normalize/gain/fade, live-reloaded into the engine), audio export (record the live
+engine to WAV/FLAC), and a shared **library**: sample import/preview/delete, named patterns
+(save/insert/update) and pattern→sample **bounce**.
 
 ## Prerequisites
 
@@ -43,6 +44,7 @@ Open the **Diagnostics** pane in the app to see exactly what is detected and wha
 | `Cmd/Ctrl+S`                             | save                                       |
 | `Cmd/Ctrl+Shift+S`                       | save as                                    |
 | `Cmd/Ctrl+O`                             | open a file                                |
+| `Cmd/Ctrl+Shift+P`                       | save the selection as a pattern            |
 | `Tab` / `Shift+Tab`                      | accept autocomplete (or indent) / outdent  |
 | `Enter` in the console row               | evaluate the typed line                    |
 | `Cmd/Ctrl+Z`, `Shift+Cmd/Ctrl+Z`         | undo / redo (CodeMirror defaults)          |
@@ -90,6 +92,7 @@ browse for any wav/aif/flac/mp3/ogg/caf), choose an operation — `reverse`, `tr
 - On a live SuperDirt engine derived samples are **reloaded automatically** — no restart needed. On a
   headless/down engine they load on the next SuperDirt start.
 - Each derived sample is also registered in the local database (`samples` + `sample_transformations`).
+- Derived samples appear in the **library**'s samples category (`source: derived`).
 - **preview** plays it once; **copy name** copies the Tidal sample name.
 
 ### Export
@@ -105,6 +108,39 @@ ends the take.
   the record button is disabled otherwise.
 - **open in folder** reveals the finished file.
 - Recording stops cleanly on engine restart/quit, so the file is always finalized.
+
+### Library
+
+The **library** button (header) opens an overlay with two categories, `samples | patterns`. It is
+mutually exclusive with the transform and export panels.
+
+**samples** — everything under the app-data dir that the engine loads on demand:
+
+- **import audio…** copies the selected files (wav/aif/aiff/aifc/flac/mp3/ogg/caf) **as-is** into
+  `…/samples/custom/<name>/<original-file>`. The folder name _is_ the Tidal sample name: it is the
+  sanitized file stem (lowercase `a-z0-9_-`), with a numeric suffix on collision.
+- The content hash (blake3 of the bytes) is the dedupe key: re-importing identical audio is skipped.
+- Rows show name, duration and source (`custom` / `derived`). **preview** plays `once $ s "name"`,
+  **transform** hands the file to the transform panel as its source, **delete** removes the folder
+  and the DB row.
+- A live SuperDirt engine reloads the sample trees automatically (no restart); deleting files does
+  not unload buffers that are already in the engine — reload/restart to free the name.
+
+**patterns** — named Tidal code stored in the local DB (`snippets.kind = 'pattern'`, global across
+projects):
+
+- Select code in the editor and press `Cmd/Ctrl+Shift+P` (or **save selection…**): type a name and
+  save. Saving under an existing name overwrites that pattern.
+- Row actions: **insert** (at the cursor), **as let** (`let <name> = …`, only for lowercase Haskell
+  identifiers; multi-line patterns are wrapped in parentheses), **update** (overwrite the pattern
+  with the current selection) and **delete**. The list is ordered by use count.
+- No auto-detection and no full-text search — you save what you select.
+
+**bounce** (pattern → sample): a pattern row's **bounce** form takes a name, a duration in seconds
+and an optional "start the pattern first" (it evaluates the code and waits 1 s). It then records the
+live SuperDirt **master bus**, imports the take as a `custom` sample, reloads the engine and offers
+**preview**. This is a wall-clock recording of a performance — it freezes the groove rather than
+rendering it offline — so the engine must be live. The take itself stays in `…/exports/`.
 
 ## Quickstart (development)
 

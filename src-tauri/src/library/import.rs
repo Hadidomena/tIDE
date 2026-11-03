@@ -280,6 +280,24 @@ mod tests {
     }
 
     #[test]
+    fn undecodable_audio_is_rejected_before_anything_is_written() {
+        let src_dir = temp_root("corrupt");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        let src = src_dir.join("broken.wav");
+        std::fs::write(&src, b"RIFF-not-really-a-wav").unwrap();
+        let data = temp_root("corrupt-data");
+
+        let err = import_into(&data, &[src.display().to_string()], None).unwrap_err();
+        assert!(err.contains("broken.wav"), "unreadable error: {err}");
+        assert!(
+            !custom_dir(&data).exists(),
+            "validation must run before the custom tree is created"
+        );
+        let _ = std::fs::remove_dir_all(&src_dir);
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
     fn missing_path_is_rejected() {
         let data = temp_root("missing-data");
         let err =
