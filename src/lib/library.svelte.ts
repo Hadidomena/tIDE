@@ -36,6 +36,11 @@ export interface ImportedSample {
 	fileSize: number;
 }
 
+export interface EditorApi {
+	selection(): string;
+	insert(code: string): boolean;
+}
+
 const AUDIO_FILTERS = [
 	{ name: 'Audio', extensions: ['wav', 'aif', 'aiff', 'aifc', 'flac', 'mp3', 'ogg', 'caf'] }
 ];
@@ -52,8 +57,24 @@ export const library = $state({
 	loading: false,
 	importing: false,
 	deletingId: null as number | null,
-	error: ''
+	error: '',
+	hasEditor: false,
+	pendingCode: '',
+	pendingTitle: ''
 });
+
+let editor: EditorApi | null = null;
+
+const HASKELL_IDENT = /^[a-z_][a-zA-Z0-9_']*$/;
+
+export function bindEditor(api: EditorApi | null) {
+	editor = api;
+	library.hasEditor = api !== null;
+}
+
+export function isHaskellIdent(name: string): boolean {
+	return HASKELL_IDENT.test(name);
+}
 
 export function openLibrary(category: LibraryCategory = 'samples') {
 	library.open = true;
@@ -195,4 +216,130 @@ export function formatDuration(ms: number | null): string {
 	if (ms === null || !Number.isFinite(ms)) return '?';
 	if (ms < 1000) return `${ms} ms`;
 	return `${(ms / 1000).toFixed(2)} s`;
+}
+
+export function beginPatternFromSelection() {
+	const code = editor?.selection() ?? '';
+	openLibrary('patterns');
+	if (!code.trim()) {
+		library.error = 'select the code to save as a pattern first';
+		return;
+	}
+	library.pendingCode = code;
+	library.pendingTitle = '';
+}
+
+export function cancelPendingPattern() {
+	library.pendingCode = '';
+	library.pendingTitle = '';
+}
+
+export async function savePattern() {
+	const code = library.pendingCode;
+	const title = library.pendingTitle.trim();
+	if (!code.trim()) {
+		library.error = 'nothing to save — select code first';
+		return;
+	}
+	if (!title) {
+		library.error = 'give the pattern a name';
+		return;
+	}
+	library.error = '';
+	try {
+		const d = await getDb();
+		const now = isoNow();
+		const existing = await d.select<{ id: number }[]>(
+			"SELECT id FROM snippets WHERE kind = 'pattern' AND title = $1 LIMIT 1",
+			[title]
+		);
+		if (existing[0]) {
+			await d.execute('UPDATE snippets SET code_content = $1, updated_at = $2 WHERE id = $3', [
+				code,
+				now,
+				existing[0].id
+			]);
+		} else {
+			await d.execute(
+				`INSERT INTO snippets (title, code_content, kind, source_project_id, use_count, created_at, updated_at)
+				 VALUES ($1, $2, 'pattern', NULL, 0, $3, $3)`,
+				[title, code, now]
+			);
+		}
+		cancelPendingPattern();
+		await refresh();
+		session.notify(`pattern "${title}" saved`);
+	} catch (e) {
+		library.error = String(e);
+	}
+}
+
+export async function deletePattern(pattern: LibraryPattern) {
+	library.error = '';
+	try {
+		const d = await getDb();
+		await d.execute('DELETE FROM snippets WHERE id = $1', [pattern.id]);
+		await refresh();
+		session.notify(`pattern "${pattern.title}" deleted`);
+	} catch (e) {
+		library.error = String(e);
+	}
+}
+
+export async function insertPattern(pattern: LibraryPattern) {
+	await insertPatternCode(pattern, pattern.codeContent);
+}
+
+export async function insertPatternBinding(pattern: LibraryPattern) {
+	if (!isHaskellIdent(pattern.title)) {
+		library.error = `"${pattern.title}" is not a lowercase Haskell identifier`;
+		return;
+	}
+	await insertPatternCode(pattern, bindingCode(pattern.title, pattern.codeContent));
+}
+
+export async function updatePattern(pattern: LibraryPattern) {
+	const code = editor?.selection() ?? '';
+	if (!code.trim()) {
+		library.error = 'select the new code in the editor first';
+		return;
+	}
+	library.error = '';
+	try {
+		const d = await getDb();
+		await d.execute('UPDATE snippets SET code_content = $1, updated_at = $2 WHERE id = $3', [
+			code,
+			isoNow(),
+			pattern.id
+		]);
+		await refresh();
+		session.notify(`pattern "${pattern.title}" updated from the selection`);
+	} catch (e) {
+		library.error = String(e);
+	}
+}
+
+async function insertPatternCode(pattern: LibraryPattern, code: string) {
+	library.error = '';
+	if (!editor || !editor.insert(code)) {
+		library.error = 'editor is not ready';
+		return;
+	}
+	try {
+		const d = await getDb();
+		await d.execute('UPDATE snippets SET use_count = use_count + 1 WHERE id = $1', [pattern.id]);
+		pattern.useCount += 1;
+	} catch (e) {
+		library.error = String(e);
+	}
+}
+
+function bindingCode(name: string, code: string): string {
+	const trimmed = code.trim();
+	if (!trimmed.includes('\n')) return `let ${name} = ${trimmed}`;
+	const body = trimmed
+		.split('\n')
+		.map((line) => `\t${line}`)
+		.join('\n');
+	return `let ${name} = (\n${body}\n\t)`;
 }

@@ -42,13 +42,23 @@
 		type TransformOp
 	} from '$lib/transform.svelte';
 	import {
+		beginPatternFromSelection,
+		bindEditor,
+		cancelPendingPattern,
+		deletePattern,
 		deleteSample,
 		formatDuration,
 		importSamples,
+		insertPattern,
+		insertPatternBinding,
+		isHaskellIdent,
 		library,
 		previewSample,
+		savePattern,
 		transformSample,
-		toggleLibrary
+		toggleLibrary,
+		updatePattern,
+		type EditorApi
 	} from '$lib/library.svelte';
 
 	const ENGINE_CHOICES: EngineChoice[] = ['auto', 'superdirt', 'headless'];
@@ -70,6 +80,7 @@ d1 $ s "bd sn:1 ~ hh"
 `);
 
 	let consoleEl: HTMLPreElement | undefined = $state();
+	let editor: EditorApi | undefined = $state();
 	let stickToBottom = true;
 	let lineIn = $state('');
 	let showLogs = $state(false);
@@ -108,10 +119,25 @@ d1 $ s "bd sn:1 ~ hh"
 			} else if (k === 'o') {
 				e.preventDefault();
 				void doOpen();
+			} else if (k === 'p' && e.shiftKey) {
+				e.preventDefault();
+				beginPatternFromSelection();
 			}
 		};
 		window.addEventListener('keydown', onKey);
 		return () => window.removeEventListener('keydown', onKey);
+	});
+
+	$effect(() => {
+		const current = editor;
+		if (!current) {
+			bindEditor(null);
+			return;
+		}
+		bindEditor({
+			selection: () => current.selection(),
+			insert: (code) => current.insert(code)
+		});
 	});
 
 	async function doOpen() {
@@ -308,6 +334,7 @@ d1 $ s "bd sn:1 ~ hh"
 <main class:with-logs={showLogs} class:with-diag={diagnostics.open}>
 	<section class="editor-pane" aria-label="code editor">
 		<Editor
+			bind:this={editor}
 			bind:content={buffer}
 			errorLine={session.errorLine}
 			onEval={handleEval}
@@ -736,15 +763,75 @@ d1 $ s "bd sn:1 ~ hh"
 						</div>
 					{/each}
 				</div>
-			{:else if library.patterns.length === 0 && !library.loading}
-				<p class="muted">no saved patterns yet</p>
 			{:else}
+				<div class="section">
+					<button class="tbtn" type="button" onclick={beginPatternFromSelection}
+						>save selection…</button
+					>
+					<p class="muted">or press Cmd/Ctrl+Shift+P with code selected</p>
+				</div>
+
+				{#if library.pendingCode}
+					<div class="section pending">
+						<span class="label">save as pattern</span>
+						<label class="field">
+							<span>name</span>
+							<input
+								bind:value={library.pendingTitle}
+								placeholder="e.g. main groove"
+								onkeydown={(e) => {
+									if (e.key === 'Enter') void savePattern();
+								}}
+							/>
+						</label>
+						<div class="row">
+							<button class="tbtn" type="button" onclick={() => void savePattern()}>save</button>
+							<button class="tbtn" type="button" onclick={cancelPendingPattern}>cancel</button>
+						</div>
+						<code class="lib-code">{library.pendingCode.split('\n')[0]}</code>
+						<p class="muted">a name that already exists overwrites that pattern</p>
+					</div>
+				{/if}
+
+				{#if library.patterns.length === 0 && !library.loading}
+					<p class="muted">no saved patterns yet</p>
+				{/if}
+
 				<div class="lib-list">
 					{#each library.patterns as pattern (pattern.id)}
 						<div class="lib-row">
 							<div class="lib-main">
 								<span class="lib-name">{pattern.title}</span>
 								<code class="lib-code">{pattern.codeContent.split('\n')[0]}</code>
+								<span class="lib-meta">
+									used {pattern.useCount}×
+									{#if !isHaskellIdent(pattern.title)}· not a valid binding name{/if}
+								</span>
+							</div>
+							<div class="row">
+								<button
+									class="tbtn"
+									type="button"
+									disabled={!library.hasEditor}
+									onclick={() => void insertPattern(pattern)}>insert</button
+								>
+								<button
+									class="tbtn"
+									type="button"
+									disabled={!library.hasEditor || !isHaskellIdent(pattern.title)}
+									title="insert a `let <name> = …` binding"
+									onclick={() => void insertPatternBinding(pattern)}>as let</button
+								>
+								<button
+									class="tbtn"
+									type="button"
+									disabled={!library.hasEditor}
+									title="overwrite this pattern with the current selection"
+									onclick={() => void updatePattern(pattern)}>update</button
+								>
+								<button class="tbtn" type="button" onclick={() => void deletePattern(pattern)}
+									>delete</button
+								>
 							</div>
 						</div>
 					{/each}
@@ -1151,6 +1238,12 @@ d1 $ s "bd sn:1 ~ hh"
 		display: flex;
 		flex-direction: column;
 		gap: 0.4rem;
+	}
+
+	.section.pending {
+		padding: 0.4rem 0.45rem;
+		border: 1px solid color-mix(in srgb, var(--sw-yellow) 35%, transparent);
+		border-radius: 6px;
 	}
 
 	.lib-list {

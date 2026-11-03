@@ -169,6 +169,26 @@
 			view.dispatch({ changes: { from: 0, to: current.length, insert: content } });
 		}
 	});
+
+	export function selection(): string {
+		const v = view;
+		if (!v) return '';
+		const { from, to } = v.state.selection.main;
+		return from === to ? '' : v.state.sliceDoc(from, to);
+	}
+
+	export function insert(code: string): boolean {
+		const v = view;
+		if (!v) return false;
+		const { from, to } = v.state.selection.main;
+		v.dispatch({
+			changes: { from, to, insert: code },
+			selection: { anchor: from + code.length },
+			scrollIntoView: true
+		});
+		v.focus();
+		return true;
+	}
 </script>
 
 <div class="editor-host" bind:this={host}></div>
