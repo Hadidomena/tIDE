@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { getDb } from './db';
+import { exporter } from './export.svelte';
 import { session } from './session.svelte';
 import { transform } from './transform.svelte';
 
@@ -60,8 +61,24 @@ export const library = $state({
 	error: '',
 	hasEditor: false,
 	pendingCode: '',
-	pendingTitle: ''
+	pendingTitle: '',
+	bouncePattern: null as LibraryPattern | null,
+	bounceName: '',
+	bounceSeconds: 4,
+	bounceStartFirst: true,
+	bouncePhase: '' as BouncePhase,
+	bouncePath: '',
+	bounceResult: ''
 });
+
+export type BouncePhase = '' | 'starting' | 'recording' | 'importing' | 'done';
+
+interface ExportStatus {
+	recording: boolean;
+	path: string;
+	format: string;
+	durationSecs: number;
+}
 
 let editor: EditorApi | null = null;
 
@@ -132,12 +149,14 @@ export async function importSamples() {
 	library.importing = true;
 	library.error = '';
 	try {
-		const imported = await invoke<ImportedSample[]>('sample_import', { paths: picked });
-		const d = await getDb();
-		const now = isoNow();
+		const imported = await invoke<ImportedSample[]>('sample_import', {
+			paths: picked,
+			name: null
+		});
 		let added = 0;
 		let skipped = 0;
 		for (const sample of imported) {
+			const d = await getDb();
 			const dupe = await d.select<{ id: number }[]>(
 				'SELECT id FROM samples WHERE hash = $1 LIMIT 1',
 				[sample.hash]
@@ -147,23 +166,7 @@ export async function importSamples() {
 				skipped += 1;
 				continue;
 			}
-			await d.execute(
-				`INSERT INTO samples
-				   (name, file_path, hash, source_type, parent_id, duration_ms, sample_rate, channels, file_size, is_stale, created_at)
-				 VALUES ($1, $2, $3, 'custom', NULL, $4, $5, $6, $7, 0, $8)
-				 ON CONFLICT(file_path) DO UPDATE SET
-				   hash = $3, duration_ms = $4, sample_rate = $5, channels = $6, file_size = $7`,
-				[
-					sample.name,
-					sample.filePath,
-					sample.hash,
-					sample.durationMs,
-					sample.sampleRate,
-					sample.channels,
-					sample.fileSize,
-					now
-				]
-			);
+			await insertSampleRow(sample);
 			added += 1;
 		}
 		if (added > 0) await invoke('sample_reload');
@@ -177,6 +180,27 @@ export async function importSamples() {
 	} finally {
 		library.importing = false;
 	}
+}
+
+async function insertSampleRow(sample: ImportedSample) {
+	const d = await getDb();
+	await d.execute(
+		`INSERT INTO samples
+		   (name, file_path, hash, source_type, parent_id, duration_ms, sample_rate, channels, file_size, is_stale, created_at)
+		 VALUES ($1, $2, $3, 'custom', NULL, $4, $5, $6, $7, 0, $8)
+		 ON CONFLICT(file_path) DO UPDATE SET
+		   hash = $3, duration_ms = $4, sample_rate = $5, channels = $6, file_size = $7`,
+		[
+			sample.name,
+			sample.filePath,
+			sample.hash,
+			sample.durationMs,
+			sample.sampleRate,
+			sample.channels,
+			sample.fileSize,
+			isoNow()
+		]
+	);
 }
 
 export function previewSample(name: string) {
@@ -342,4 +366,108 @@ function bindingCode(name: string, code: string): string {
 		.map((line) => `\t${line}`)
 		.join('\n');
 	return `let ${name} = (\n${body}\n\t)`;
+}
+
+export function engineIsLive(): boolean {
+	return session.engine?.engine === 'superdirt' && session.engine.status === 'live';
+}
+
+export function defaultSampleName(title: string): string {
+	const base = title
+		.toLowerCase()
+		.replace(/[^a-z0-9_]+/g, '-')
+		.replace(/^-+|-+$/g, '');
+	return base || 'bounce';
+}
+
+export function beginBounce(pattern: LibraryPattern) {
+	library.bouncePattern = pattern;
+	library.bounceName = defaultSampleName(pattern.title);
+	library.bounceSeconds = 4;
+	library.bounceStartFirst = true;
+	library.bouncePhase = '';
+	library.bouncePath = '';
+	library.bounceResult = '';
+	library.error = '';
+}
+
+export function cancelBounce() {
+	library.bouncePattern = null;
+	library.bouncePhase = '';
+}
+
+export function bounceBusy(): boolean {
+	return (
+		library.bouncePhase === 'starting' ||
+		library.bouncePhase === 'recording' ||
+		library.bouncePhase === 'importing'
+	);
+}
+
+export async function recordBounce() {
+	const pattern = library.bouncePattern;
+	if (!pattern || bounceBusy()) return;
+	if (!engineIsLive()) {
+		library.error = 'bounce needs a live SuperDirt engine — it records the engine master bus';
+		return;
+	}
+	if (exporter.recording) {
+		library.error = 'the export panel is already recording — stop it first';
+		return;
+	}
+	const seconds = Math.min(Math.max(Number(library.bounceSeconds) || 0, 0.5), 120);
+	library.error = '';
+	library.bounceResult = '';
+	library.bouncePath = '';
+	try {
+		if (library.bounceStartFirst) {
+			session.echo(pattern.codeContent);
+			await session.eval(pattern.codeContent);
+			await sleep(1000);
+		}
+
+		library.bouncePhase = 'starting';
+		const started = await invoke<ExportStatus>('export_start', {
+			durationSecs: seconds,
+			format: 'int16'
+		});
+		library.bouncePath = started.path;
+		library.bouncePhase = 'recording';
+		await sleep((seconds + 1) * 1000);
+		await invoke('export_stop');
+
+		library.bouncePhase = 'importing';
+		const take = await invoke<ExportStatus>('export_finalize', {
+			wavPath: started.path,
+			target: 'wav',
+			deleteSource: false
+		});
+		const name = library.bounceName.trim() || defaultSampleName(pattern.title);
+		const imported = await invoke<ImportedSample[]>('sample_import', {
+			paths: [take.path],
+			name
+		});
+		const sample = imported[0];
+		if (!sample) throw new Error('import returned no sample');
+		await insertSampleRow(sample);
+		await invoke('sample_reload');
+		await refresh();
+		library.bounceResult = sample.name;
+		library.bouncePhase = 'done';
+		session.notify(`bounced "${pattern.title}" → ${sample.name} (${seconds}s)`);
+	} catch (e) {
+		library.error = String(e);
+		library.bouncePhase = '';
+	}
+}
+
+export function dismissBounce() {
+	library.bouncePattern = null;
+	library.bouncePhase = '';
+	library.bouncePath = '';
+	library.bounceResult = '';
+}
+
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
 }

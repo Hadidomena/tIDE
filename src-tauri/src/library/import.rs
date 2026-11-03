@@ -20,6 +20,7 @@ pub struct ImportedSample {
 #[tauri::command]
 pub async fn sample_import(
     paths: Vec<String>,
+    name: Option<String>,
     app: tauri::AppHandle,
 ) -> Result<Vec<ImportedSample>, String> {
     use tauri::Manager;
@@ -27,14 +28,21 @@ pub async fn sample_import(
         .path()
         .app_data_dir()
         .map_err(|e| format!("app data dir unavailable: {e}"))?;
-    tauri::async_runtime::spawn_blocking(move || import_into(&data_dir, &paths))
+    tauri::async_runtime::spawn_blocking(move || import_into(&data_dir, &paths, name.as_deref()))
         .await
         .map_err(|e| format!("import job failed: {e}"))?
 }
 
-pub fn import_into(data_dir: &Path, paths: &[String]) -> Result<Vec<ImportedSample>, String> {
+pub fn import_into(
+    data_dir: &Path,
+    paths: &[String],
+    name: Option<&str>,
+) -> Result<Vec<ImportedSample>, String> {
     if paths.is_empty() {
         return Ok(Vec::new());
+    }
+    if name.is_some() && paths.len() != 1 {
+        return Err("a sample name can only be used with a single file".to_string());
     }
     let prepared: Vec<Prepared> = paths
         .iter()
@@ -43,7 +51,7 @@ pub fn import_into(data_dir: &Path, paths: &[String]) -> Result<Vec<ImportedSamp
     let root = ensure_custom_dir(data_dir)?;
     prepared
         .into_iter()
-        .map(|item| copy_one(&root, item))
+        .map(|item| copy_one(&root, item, name))
         .collect()
 }
 
@@ -77,7 +85,7 @@ fn prepare(source: &Path) -> Result<Prepared, String> {
     })
 }
 
-fn copy_one(root: &Path, item: Prepared) -> Result<ImportedSample, String> {
+fn copy_one(root: &Path, item: Prepared, name: Option<&str>) -> Result<ImportedSample, String> {
     let Prepared {
         source,
         decoded,
@@ -87,7 +95,8 @@ fn copy_one(root: &Path, item: Prepared) -> Result<ImportedSample, String> {
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or_default();
-    let base = match sanitize_name(stem) {
+    let requested = name.unwrap_or(stem);
+    let base = match sanitize_name(requested) {
         name if name.is_empty() => "sample".to_string(),
         name => name,
     };
@@ -191,7 +200,7 @@ mod tests {
         let src = write_wav(&src_dir, "Kick 01!.wav");
         let data = temp_root("data");
 
-        let imported = import_into(&data, &[src.display().to_string()]).expect("import");
+        let imported = import_into(&data, &[src.display().to_string()], None).expect("import");
         assert_eq!(imported.len(), 1);
         let sample = &imported[0];
 
@@ -222,8 +231,12 @@ mod tests {
         let b = write_wav(&src_dir.join("b"), "kick.wav");
         let data = temp_root("collide-data");
 
-        let imported = import_into(&data, &[a.display().to_string(), b.display().to_string()])
-            .expect("import both");
+        let imported = import_into(
+            &data,
+            &[a.display().to_string(), b.display().to_string()],
+            None,
+        )
+        .expect("import both");
         let names: Vec<&str> = imported.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, vec!["kick", "kick-2"]);
         assert!(custom_dir(&data).join("kick").is_dir());
@@ -255,7 +268,7 @@ mod tests {
         std::fs::write(&src, b"not audio").unwrap();
         let data = temp_root("reject-data");
 
-        let err = import_into(&data, &[src.display().to_string()]).unwrap_err();
+        let err = import_into(&data, &[src.display().to_string()], None).unwrap_err();
         assert!(err.contains(".txt"), "unreadable error: {err}");
         assert!(err.contains("supported: wav"), "unreadable error: {err}");
         assert!(
@@ -269,7 +282,8 @@ mod tests {
     #[test]
     fn missing_path_is_rejected() {
         let data = temp_root("missing-data");
-        let err = import_into(&data, &["/nonexistent/tide/kick.wav".to_string()]).unwrap_err();
+        let err =
+            import_into(&data, &["/nonexistent/tide/kick.wav".to_string()], None).unwrap_err();
         assert!(err.contains("not a file"), "unreadable error: {err}");
         let _ = std::fs::remove_dir_all(&data);
     }
@@ -277,7 +291,46 @@ mod tests {
     #[test]
     fn empty_selection_is_a_noop() {
         let data = temp_root("empty");
-        assert!(import_into(&data, &[]).unwrap().is_empty());
+        assert!(import_into(&data, &[], None).unwrap().is_empty());
         assert!(!data.exists(), "no dirs are created for an empty selection");
+    }
+
+    #[test]
+    fn named_import_uses_the_given_name() {
+        let src_dir = temp_root("named-src");
+        let src = write_wav(&src_dir, "tIDE-20261103-101500.wav");
+        let data = temp_root("named-data");
+
+        let imported = import_into(&data, &[src.display().to_string()], Some("Bounce 01!"))
+            .expect("named import");
+        assert_eq!(imported.len(), 1);
+        assert_eq!(imported[0].name, "bounce-01");
+        assert!(
+            custom_dir(&data)
+                .join("bounce-01")
+                .join("tIDE-20261103-101500.wav")
+                .is_file()
+        );
+
+        let _ = std::fs::remove_dir_all(&src_dir);
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn named_import_rejects_multiple_paths() {
+        let src_dir = temp_root("named-multi-src");
+        let a = write_wav(&src_dir.join("a"), "a.wav");
+        let b = write_wav(&src_dir.join("b"), "b.wav");
+        let data = temp_root("named-multi-data");
+
+        let err = import_into(
+            &data,
+            &[a.display().to_string(), b.display().to_string()],
+            Some("both"),
+        )
+        .unwrap_err();
+        assert!(err.contains("single file"), "unreadable error: {err}");
+        let _ = std::fs::remove_dir_all(&src_dir);
+        let _ = std::fs::remove_dir_all(&data);
     }
 }

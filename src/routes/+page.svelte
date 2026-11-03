@@ -43,10 +43,15 @@
 	} from '$lib/transform.svelte';
 	import {
 		beginPatternFromSelection,
+		beginBounce,
 		bindEditor,
+		bounceBusy,
+		cancelBounce,
 		cancelPendingPattern,
 		deletePattern,
 		deleteSample,
+		dismissBounce,
+		engineIsLive,
 		formatDuration,
 		importSamples,
 		insertPattern,
@@ -54,6 +59,7 @@
 		isHaskellIdent,
 		library,
 		previewSample,
+		recordBounce,
 		savePattern,
 		transformSample,
 		toggleLibrary,
@@ -793,6 +799,75 @@ d1 $ s "bd sn:1 ~ hh"
 					</div>
 				{/if}
 
+				{#if library.bouncePattern}
+					<div class="section pending">
+						<span class="label">bounce "{library.bouncePattern.title}" to a sample</span>
+						<label class="field">
+							<span>name</span>
+							<input bind:value={library.bounceName} />
+						</label>
+						<label class="field">
+							<span>seconds</span>
+							<input
+								type="number"
+								min="0.5"
+								max="120"
+								step="0.5"
+								bind:value={library.bounceSeconds}
+							/>
+						</label>
+						<label class="check">
+							<input type="checkbox" bind:checked={library.bounceStartFirst} />
+							<span>start the pattern first (1 s lead-in)</span>
+						</label>
+						{#if !engineIsLive()}
+							<p class="muted">engine not live — bounce records the SuperDirt master bus</p>
+						{/if}
+						<div class="row">
+							<button
+								class="tbtn"
+								type="button"
+								disabled={!engineIsLive() || bounceBusy()}
+								onclick={() => void recordBounce()}
+							>
+								{#if library.bouncePhase === 'starting'}
+									starting…
+								{:else if library.bouncePhase === 'recording'}
+									recording… {library.bounceSeconds}s
+								{:else if library.bouncePhase === 'importing'}
+									importing…
+								{:else}
+									record
+								{/if}
+							</button>
+							<button class="tbtn" type="button" disabled={bounceBusy()} onclick={cancelBounce}
+								>cancel</button
+							>
+						</div>
+						<p class="muted">
+							live wall-clock recording — it freezes the groove, it is not an offline render
+						</p>
+					</div>
+				{/if}
+
+				{#if library.bounceResult}
+					<div class="section">
+						<span class="muted">bounced → <b>{library.bounceResult}</b></span>
+						{#if library.bouncePath}
+							<span class="muted source" title={library.bouncePath}>{library.bouncePath}</span>
+						{/if}
+						<div class="row">
+							<button
+								class="tbtn"
+								type="button"
+								disabled={session.state !== 'ready'}
+								onclick={() => previewSample(library.bounceResult)}>preview</button
+							>
+							<button class="tbtn" type="button" onclick={dismissBounce}>dismiss</button>
+						</div>
+					</div>
+				{/if}
+
 				{#if library.patterns.length === 0 && !library.loading}
 					<p class="muted">no saved patterns yet</p>
 				{/if}
@@ -828,6 +903,9 @@ d1 $ s "bd sn:1 ~ hh"
 									disabled={!library.hasEditor}
 									title="overwrite this pattern with the current selection"
 									onclick={() => void updatePattern(pattern)}>update</button
+								>
+								<button class="tbtn" type="button" onclick={() => beginBounce(pattern)}
+									>bounce</button
 								>
 								<button class="tbtn" type="button" onclick={() => void deletePattern(pattern)}
 									>delete</button
@@ -1260,6 +1338,21 @@ d1 $ s "bd sn:1 ~ hh"
 		padding: 0.35rem 0.45rem;
 		border: 1px solid color-mix(in srgb, var(--sw-pink) 22%, transparent);
 		border-radius: 6px;
+	}
+
+	.lib-row .row {
+		flex-wrap: wrap;
+	}
+
+	.check {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		font-size: 0.68rem;
+	}
+
+	.check input {
+		accent-color: var(--sw-pink);
 	}
 
 	.lib-main {

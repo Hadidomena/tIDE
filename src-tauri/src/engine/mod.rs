@@ -964,8 +964,9 @@ mod tests {
                 .as_nanos()
         ));
         dsp::encode_wav(&picked, &decoded, 16).expect("encode import probe");
-        let imported = crate::library::import::import_into(&dir, &[picked.display().to_string()])
-            .expect("import probe into custom");
+        let imported =
+            crate::library::import::import_into(&dir, &[picked.display().to_string()], None)
+                .expect("import probe into custom");
         assert_eq!(imported.len(), 1);
         assert!(custom_dir(&dir).join(&imported[0].name).is_dir());
         let _ = std::fs::remove_file(&picked);
@@ -1044,6 +1045,84 @@ mod tests {
         );
 
         let _ = export::stop_in(&dir);
+        launcher.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[ignore = "requires SuperCollider (sclang) — boots a real engine and bounces a take into the library"]
+    fn superdirt_bounce_records_a_sample() {
+        use crate::export;
+        use crate::library::custom_dir;
+        use crate::library::import::import_into;
+        use crate::library::transform::reload_flag_path;
+
+        let (launcher, rx) = EngineLauncher::for_test();
+        let dir = std::env::temp_dir().join(format!(
+            "tide-engine-bounce-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        launcher
+            .start(
+                Engine::SuperDirt,
+                dir.clone(),
+                None,
+                AudioDevices::default(),
+            )
+            .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(90);
+        let mut live = false;
+        let mut log = String::new();
+        while Instant::now() < deadline && !live {
+            match rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(SessionEvent::Output { text, .. }) => log.push_str(&text),
+                Ok(SessionEvent::Engine {
+                    status: EngineState::Live,
+                    ..
+                }) => live = true,
+                _ => {}
+            }
+        }
+        assert!(live, "engine never reached Live\nengine output:\n{log}");
+
+        let started = export::start_in(&dir, Some(1.5), Some("int16".to_string())).unwrap();
+        assert!(started.recording);
+        thread::sleep(Duration::from_secs(3));
+        let _ = export::stop_in(&dir);
+        let take = export::finalize_in(&dir, &started.path, "wav", false)
+            .unwrap_or_else(|e| panic!("finalize failed: {e}"));
+        assert_eq!(take.format, "wav");
+
+        let imported =
+            import_into(&dir, std::slice::from_ref(&take.path), Some("Bounce 01")).unwrap();
+        assert_eq!(imported.len(), 1);
+        assert_eq!(imported[0].name, "bounce-01");
+        let folder = custom_dir(&dir).join("bounce-01");
+        assert!(folder.is_dir(), "bounce must land in custom/bounce-01");
+        assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 1);
+
+        let flag = reload_flag_path(&dir);
+        std::fs::write(&flag, "reload").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut reloaded = false;
+        while Instant::now() < deadline && !reloaded {
+            match rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(SessionEvent::Output { text, .. }) if text.contains("samples reloaded") => {
+                    reloaded = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(reloaded, "engine never loaded the bounced sample");
+        assert!(!flag.exists(), "reload flag was not consumed by the engine");
+
         launcher.stop();
         let _ = std::fs::remove_dir_all(&dir);
     }
