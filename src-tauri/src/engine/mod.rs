@@ -20,6 +20,7 @@ const DERIVED_PLACEHOLDER: &str = "__TIDE_DERIVED__";
 const RELOAD_PLACEHOLDER: &str = "__TIDE_RELOAD__";
 const RECORD_PLACEHOLDER: &str = "__TIDE_RECORD__";
 const STOP_RECORD_PLACEHOLDER: &str = "__TIDE_STOPRECORD__";
+const FEEDBACK_PLACEHOLDER: &str = "__TIDE_FEEDBACK__";
 const IN_DEVICE_PLACEHOLDER: &str = "__TIDE_IN_DEVICE__";
 const IN_CHANNELS_PLACEHOLDER: &str = "__TIDE_IN_CHANNELS__";
 const OUT_DEVICE_PLACEHOLDER: &str = "__TIDE_OUT_DEVICE__";
@@ -219,9 +220,16 @@ fn worker_loop(rx: Receiver<Cmd>, evt: Sender<SessionEvent>, status: Arc<Mutex<E
                 if let Some(old) = running.take() {
                     shutdown(old, &evt, &status, "restarted");
                 }
-                if let Ok(started) =
-                    start_engine(engine, &dir, sclang_override, devices, &rx, &evt, &status)
-                {
+                if let Ok(started) = start_engine(
+                    engine,
+                    &dir,
+                    sclang_override,
+                    devices,
+                    0,
+                    &rx,
+                    &evt,
+                    &status,
+                ) {
                     running = started;
                 }
             }
@@ -250,11 +258,13 @@ fn worker_loop(rx: Receiver<Cmd>, evt: Sender<SessionEvent>, status: Arc<Mutex<E
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn start_engine(
     engine: Engine,
     data_dir: &Path,
     sclang_override: Option<String>,
     devices: AudioDevices,
+    feedback_port: u16,
     rx: &Receiver<Cmd>,
     evt: &Sender<SessionEvent>,
     status: &Arc<Mutex<EngineStatus>>,
@@ -272,7 +282,15 @@ fn start_engine(
         }
         Engine::SuperDirt => {
             let custom_devices = devices.input.is_named() || devices.output.is_some();
-            match start_superdirt(data_dir, sclang_override.clone(), devices, rx, evt, status) {
+            match start_superdirt(
+                data_dir,
+                sclang_override.clone(),
+                devices,
+                feedback_port,
+                rx,
+                evt,
+                status,
+            ) {
                 Ok(running) => Ok(Some(running)),
                 Err(reason) if custom_devices => {
                     emit_output(
@@ -284,6 +302,7 @@ fn start_engine(
                         data_dir,
                         sclang_override,
                         AudioDevices::default(),
+                        feedback_port,
                         rx,
                         evt,
                         status,
@@ -318,6 +337,7 @@ fn start_superdirt(
     data_dir: &Path,
     sclang_override: Option<String>,
     devices: AudioDevices,
+    feedback_port: u16,
     rx: &Receiver<Cmd>,
     evt: &Sender<SessionEvent>,
     status: &Arc<Mutex<EngineStatus>>,
@@ -348,6 +368,7 @@ fn start_superdirt(
             &reload_flag,
             &record_flag,
             &stop_flag,
+            feedback_port,
             &devices,
         ),
     ) {
@@ -606,6 +627,7 @@ fn render_boot_script(
     reload_flag: &Path,
     record_flag: &Path,
     stop_flag: &Path,
+    feedback_port: u16,
     devices: &AudioDevices,
 ) -> String {
     let samples = samples
@@ -637,6 +659,7 @@ fn render_boot_script(
         .replace(RELOAD_PLACEHOLDER, &reload_flag)
         .replace(RECORD_PLACEHOLDER, &record_flag)
         .replace(STOP_RECORD_PLACEHOLDER, &stop_flag)
+        .replace(FEEDBACK_PLACEHOLDER, &feedback_port.to_string())
         .replace(IN_DEVICE_PLACEHOLDER, &input)
         .replace(IN_CHANNELS_PLACEHOLDER, input_channels)
         .replace(OUT_DEVICE_PLACEHOLDER, &output)
@@ -660,6 +683,7 @@ mod tests {
             Path::new(r#"C:\Users\me\reload.txt"#),
             Path::new(r#"C:\Users\me\record.txt"#),
             Path::new(r#"C:\Users\me\stoprecord.txt"#),
+            57123,
             &AudioDevices {
                 input: AudioInput::Device("Mic \"Pro\"".to_string()),
                 output: Some("Speakers".to_string()),
@@ -672,6 +696,7 @@ mod tests {
         assert!(!script.contains(RELOAD_PLACEHOLDER));
         assert!(!script.contains(RECORD_PLACEHOLDER));
         assert!(!script.contains(STOP_RECORD_PLACEHOLDER));
+        assert!(!script.contains(FEEDBACK_PLACEHOLDER));
         assert!(!script.contains(IN_DEVICE_PLACEHOLDER));
         assert!(!script.contains(IN_CHANNELS_PLACEHOLDER));
         assert!(!script.contains(OUT_DEVICE_PLACEHOLDER));
@@ -703,6 +728,23 @@ mod tests {
         assert!(script.contains("File.exists(dir)"));
         assert!(script.contains("loadLibrary.value(custom)"));
         assert!(script.contains("loadLibrary.value(derived)"));
+        assert!(script.contains("var feedbackPort = 57123;"));
+        assert!(script.contains("if (feedbackPort > 0)"));
+        assert!(script.contains("NetAddr(\"127.0.0.1\", feedbackPort)"));
+        assert!(script.contains(r#"defaultParentEvent[\diversion]"#));
+        assert!(script.contains("feedback.sendMsg("));
+        assert!(script.contains("\"/tide/hit\""));
+        assert!(script.contains("(now - lastSend) > 0.03"));
+        let start_at = script
+            .find("~tideDirt.start(57120, 0 ! 16)")
+            .expect("start call");
+        let hook_at = script
+            .find(r#"defaultParentEvent[\diversion]"#)
+            .expect("feedback hook");
+        assert!(
+            hook_at > start_at,
+            "the diversion hook must be installed after start() creates the orbits"
+        );
         assert!(script.contains("File.delete(reloadFlag)"));
         assert!(script.contains("samples reloaded"));
         assert!(script.contains("File.exists(recordFlag)"));
@@ -719,6 +761,7 @@ mod tests {
             Path::new("/tmp/reload.txt"),
             Path::new("/tmp/record.txt"),
             Path::new("/tmp/stoprecord.txt"),
+            0,
             &AudioDevices::default(),
         );
         assert!(!headless_script.contains(SAMPLES_PLACEHOLDER));
@@ -727,6 +770,8 @@ mod tests {
         assert!(!headless_script.contains(RELOAD_PLACEHOLDER));
         assert!(!headless_script.contains(RECORD_PLACEHOLDER));
         assert!(!headless_script.contains(STOP_RECORD_PLACEHOLDER));
+        assert!(!headless_script.contains(FEEDBACK_PLACEHOLDER));
+        assert!(headless_script.contains("var feedbackPort = 0;"));
         assert!(headless_script.contains("no Dirt-Samples directory configured"));
         assert!(headless_script.contains("var inDevice = \"\";"));
         assert!(headless_script.contains("var inChannels = 0;"));
@@ -744,6 +789,7 @@ mod tests {
                 Path::new("/tmp/reload.txt"),
                 Path::new("/tmp/record.txt"),
                 Path::new("/tmp/stoprecord.txt"),
+                0,
                 &AudioDevices {
                     input,
                     output: None,
