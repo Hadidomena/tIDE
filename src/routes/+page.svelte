@@ -1,6 +1,9 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import Editor from '$lib/editor/Editor.svelte';
+	import Metronome from '$lib/Metronome.svelte';
+	import { indexOrbits, rangesFor } from '$lib/fragments';
+	import { resetClock, syncClock } from '$lib/playback.svelte';
 	import {
 		checkLastProject,
 		openLastProject,
@@ -87,6 +90,9 @@ d1 $ s "bd sn:1 ~ hh"
 
 	let consoleEl: HTMLPreElement | undefined = $state();
 	let editor: EditorApi | undefined = $state();
+	let flashes = $state<{ from: number; to: number; seq: number }[]>([]);
+	let flashSeq = 0;
+	let lastFlashSnapshot: unknown = null;
 	let stickToBottom = true;
 	let lineIn = $state('');
 	let showLogs = $state(false);
@@ -144,6 +150,45 @@ d1 $ s "bd sn:1 ~ hh"
 			selection: () => current.selection(),
 			insert: (code) => current.insert(code)
 		});
+	});
+
+	const orbitCode = $derived(indexOrbits(buffer));
+
+	$effect(() => {
+		const snapshot = session.playback;
+		if (!snapshot) {
+			resetClock();
+			return;
+		}
+		syncClock(snapshot);
+	});
+
+	// Flash the code fragment that produced each hit (Strudel-style, fragment by fragment).
+	$effect(() => {
+		const snapshot = session.playback;
+		if (!snapshot || snapshot.orbits.length === 0) return;
+		if (snapshot === lastFlashSnapshot) return;
+		lastFlashSnapshot = snapshot;
+
+		const next: { from: number; to: number; seq: number }[] = [];
+		for (const orbit of snapshot.orbits) {
+			if (orbit.hits <= 0) continue;
+			for (const range of rangesFor(orbitCode, orbit.orbit, orbit.sample)) {
+				if (range.to > range.from) next.push({ ...range, seq: ++flashSeq });
+			}
+		}
+		if (next.length === 0) return;
+
+		const mine = new Set(next.map((flash) => flash.seq));
+		flashes = [...untrack(() => flashes), ...next];
+		setTimeout(() => {
+			flashes = flashes.filter((flash) => !mine.has(flash.seq));
+		}, 700);
+	});
+
+	$effect(() => {
+		void buffer;
+		flashes = [];
 	});
 
 	async function doOpen() {
@@ -343,6 +388,7 @@ d1 $ s "bd sn:1 ~ hh"
 			bind:this={editor}
 			bind:content={buffer}
 			errorLine={session.errorLine}
+			flashRanges={flashes}
 			onEval={handleEval}
 			onRunAll={handleRunAll}
 			onHush={handleHush}
@@ -924,6 +970,7 @@ d1 $ s "bd sn:1 ~ hh"
 			{/if}
 		</aside>
 	{/if}
+	<Metronome />
 </main>
 
 <style>

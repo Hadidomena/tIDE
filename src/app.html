@@ -5,6 +5,31 @@
 		<link rel="icon" href="%sveltekit.assets%/favicon.png" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<title>Tauri + SvelteKit + Typescript App</title>
+		<style>
+			@keyframes tide-flash {
+				from {
+					background-color: color-mix(in srgb, var(--sw-blue, #36f9f6) 55%, transparent);
+				}
+				to {
+					background-color: transparent;
+				}
+			}
+			@keyframes tide-flash-alt {
+				from {
+					background-color: color-mix(in srgb, var(--sw-yellow, #fede5d) 55%, transparent);
+				}
+				to {
+					background-color: transparent;
+				}
+			}
+			.cm-flash {
+				animation: tide-flash 520ms ease-out;
+				border-radius: 3px;
+			}
+			.cm-flash-alt {
+				animation-name: tide-flash-alt;
+			}
+		</style>
 		%sveltekit.head%
 	</head>
 	<body data-sveltekit-preload-data="hover">

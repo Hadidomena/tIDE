@@ -6,6 +6,8 @@ var derived = "__TIDE_DERIVED__";
 var reloadFlag = "__TIDE_RELOAD__";
 var recordFlag = "__TIDE_RECORD__";
 var stopFlag = "__TIDE_STOPRECORD__";
+var feedbackPort = __TIDE_FEEDBACK__;
+var feedback;
 var inDevice = "__TIDE_IN_DEVICE__";
 var inChannels = __TIDE_IN_CHANNELS__;
 var outDevice = "__TIDE_OUT_DEVICE__";
@@ -75,6 +77,33 @@ s.waitForBoot(
 			loadLibrary.value(custom);
 			loadLibrary.value(derived);
 			~tideDirt.start(57120, 0 ! 16);
+			if (feedbackPort > 0) {
+				feedback = NetAddr("127.0.0.1", feedbackPort);
+				~tideDirt.orbits.do { |orbit, i|
+					var lastSend = 0.0;
+					orbit.defaultParentEvent[\diversion] = { |ev|
+						try {
+							if (ev.notNil) {
+								var e = ev.event;
+								var sample = e[\s];
+								var now = Main.elapsedTime;
+								if (sample.notNil and: { sample != \ } and: { (now - lastSend) > 0.03 }) {
+									lastSend = now;
+									feedback.sendMsg(
+										"/tide/hit",
+										i,
+										(e[\cycle] ? 0).asString,
+										(e[\latency] ? 0).asFloat,
+										sample.asString,
+										if (e[\n].isNumber) { e[\n].asFloat } { -1 }
+									);
+								};
+							};
+						} { |err| };
+						nil;
+					};
+				};
+			};
 			fork {
 				loop {
 					1.wait;

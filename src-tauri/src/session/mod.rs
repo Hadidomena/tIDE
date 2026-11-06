@@ -1,6 +1,7 @@
 pub mod process;
 
 use crate::engine::{AudioDevices, AudioInputChoice, Engine, EngineLauncher, EngineState};
+use crate::feedback::{Feedback, OrbitHit};
 use process::{
     PRELUDE, PROMPT_SETUP, Statement, is_ready, prelude_prompts, split_statements, wrap_code,
 };
@@ -52,6 +53,35 @@ pub enum SessionEvent {
         status: EngineState,
         detail: String,
     },
+    Playback {
+        cycle: f64,
+        cps: f64,
+        latency: f32,
+        orbits: Vec<OrbitHit>,
+    },
+}
+
+fn start_feedback(evt: Sender<SessionEvent>) -> (Option<Feedback>, u16) {
+    match Feedback::start() {
+        Ok((feedback, snapshots)) => {
+            let port = feedback.port();
+            thread::spawn(move || {
+                while let Ok(snapshot) = snapshots.recv() {
+                    let event = SessionEvent::Playback {
+                        cycle: snapshot.cycle,
+                        cps: snapshot.cps,
+                        latency: snapshot.latency,
+                        orbits: snapshot.orbits,
+                    };
+                    if evt.send(event).is_err() {
+                        break;
+                    }
+                }
+            });
+            (Some(feedback), port)
+        }
+        Err(_) => (None, 0),
+    }
 }
 
 enum Line {
@@ -60,8 +90,8 @@ enum Line {
 }
 
 enum Cmd {
-    Start(Engine, PathBuf, AudioDevices),
-    Restart(Option<Engine>, PathBuf, AudioDevices),
+    Start(Engine, PathBuf, AudioDevices, u16),
+    Restart(Option<Engine>, PathBuf, AudioDevices, u16),
     Stop,
     Eval(String, Option<usize>),
     Death { id: u32, reason: String },
@@ -88,6 +118,8 @@ pub struct Session {
     cmd_tx: Sender<Cmd>,
     evt_rx: Mutex<Option<Receiver<SessionEvent>>>,
     state: SharedState,
+    _feedback: Option<Feedback>,
+    feedback_port: u16,
 }
 
 impl Default for Session {
@@ -111,11 +143,14 @@ impl Session {
         let worker_evt = evt_tx.clone();
         let worker_state = Arc::clone(&state);
         let engine = EngineLauncher::new(evt_tx.clone());
+        let (feedback, feedback_port) = start_feedback(evt_tx.clone());
         thread::spawn(move || worker_loop(cmd_rx, monitor_tx, worker_evt, worker_state, engine));
         Self {
             cmd_tx,
             evt_rx: Mutex::new(Some(evt_rx)),
             state,
+            _feedback: feedback,
+            feedback_port,
         }
     }
 
@@ -128,12 +163,15 @@ impl Session {
         let worker_evt = evt_tx.clone();
         let worker_state = Arc::clone(&state);
         let engine = EngineLauncher::new(evt_tx.clone());
+        let (feedback, feedback_port) = start_feedback(evt_tx.clone());
         thread::spawn(move || worker_loop(cmd_rx, monitor_tx, worker_evt, worker_state, engine));
         (
             Self {
                 cmd_tx,
                 evt_rx: Mutex::new(None),
                 state,
+                _feedback: feedback,
+                feedback_port,
             },
             evt_rx,
         )
@@ -156,7 +194,7 @@ impl Session {
         devices: AudioDevices,
     ) -> Result<(), String> {
         *self.state.lock().unwrap() = SessionState::Starting;
-        if let Err(e) = self.send(Cmd::Start(engine, data_dir, devices)) {
+        if let Err(e) = self.send(Cmd::Start(engine, data_dir, devices, self.feedback_port)) {
             *self.state.lock().unwrap() = SessionState::Stopped;
             return Err(e);
         }
@@ -181,7 +219,7 @@ impl Session {
         devices: AudioDevices,
     ) -> Result<(), String> {
         *self.state.lock().unwrap() = SessionState::Starting;
-        if let Err(e) = self.send(Cmd::Restart(engine, data_dir, devices)) {
+        if let Err(e) = self.send(Cmd::Restart(engine, data_dir, devices, self.feedback_port)) {
             *self.state.lock().unwrap() = SessionState::Stopped;
             return Err(e);
         }
@@ -519,17 +557,25 @@ fn wait_engine(launcher: &EngineLauncher) -> Result<(), String> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn do_start(
     engine: Engine,
     data_dir: &Path,
     devices: &AudioDevices,
+    feedback_port: u16,
     launcher: &EngineLauncher,
     monitor_tx: &Sender<Cmd>,
     evt: &Events,
     id: u32,
 ) -> Result<Active, String> {
     launcher
-        .start(engine, data_dir.to_path_buf(), None, devices.clone())
+        .start(
+            engine,
+            data_dir.to_path_buf(),
+            None,
+            devices.clone(),
+            feedback_port,
+        )
         .map_err(|e| format!("engine start failed: {e}"))?;
     wait_engine(launcher)?;
 
@@ -579,6 +625,7 @@ fn begin_session(
     kind: Engine,
     data_dir: &Path,
     devices: &AudioDevices,
+    feedback_port: u16,
     active: &mut Option<Active>,
     next_id: &mut u32,
     monitor_tx: &Sender<Cmd>,
@@ -589,7 +636,16 @@ fn begin_session(
     kill(active);
     engine.stop();
     set_state(state, evt, SessionState::Starting);
-    match do_start(kind, data_dir, devices, engine, monitor_tx, evt, *next_id) {
+    match do_start(
+        kind,
+        data_dir,
+        devices,
+        feedback_port,
+        engine,
+        monitor_tx,
+        evt,
+        *next_id,
+    ) {
         Ok(a) => {
             *next_id += 1;
             *active = Some(a);
@@ -612,7 +668,7 @@ fn worker_loop(
 ) {
     let mut active: Option<Active> = None;
     let mut next_id: u32 = 0;
-    let mut config: Option<(Engine, PathBuf, AudioDevices)> = None;
+    let mut config: Option<(Engine, PathBuf, AudioDevices, u16)> = None;
 
     loop {
         let cmd = match cmd_rx.recv() {
@@ -625,12 +681,13 @@ fn worker_loop(
         };
 
         match cmd {
-            Cmd::Start(kind, data_dir, devices) => {
-                config = Some((kind, data_dir.clone(), devices.clone()));
+            Cmd::Start(kind, data_dir, devices, feedback_port) => {
+                config = Some((kind, data_dir.clone(), devices.clone(), feedback_port));
                 begin_session(
                     kind,
                     &data_dir,
                     &devices,
+                    feedback_port,
                     &mut active,
                     &mut next_id,
                     &monitor_tx,
@@ -640,19 +697,20 @@ fn worker_loop(
                 );
             }
 
-            Cmd::Restart(engine_kind, data_dir, devices) => {
+            Cmd::Restart(engine_kind, data_dir, devices, feedback_port) => {
                 let target = match engine_kind {
                     Some(kind) => {
-                        config = Some((kind, data_dir.clone(), devices.clone()));
-                        Some((kind, data_dir, devices))
+                        config = Some((kind, data_dir.clone(), devices.clone(), feedback_port));
+                        Some((kind, data_dir, devices, feedback_port))
                     }
                     None => config.clone(),
                 };
                 match target {
-                    Some((kind, dir, devices)) => begin_session(
+                    Some((kind, dir, devices, feedback_port)) => begin_session(
                         kind,
                         &dir,
                         &devices,
+                        feedback_port,
                         &mut active,
                         &mut next_id,
                         &monitor_tx,
@@ -795,7 +853,7 @@ mod tests {
                     state: SessionState::Failed,
                 } => return Err(format!("session failed, output so far: {out}")),
                 SessionEvent::State { state } => return Err(format!("unexpected state {state:?}")),
-                SessionEvent::Engine { .. } => {}
+                SessionEvent::Engine { .. } | SessionEvent::Playback { .. } => {}
             }
         }
     }
@@ -809,6 +867,9 @@ mod tests {
                     log.push_str(&format!("[engine {status:?}] {detail}\n"));
                 }
                 SessionEvent::State { state } => log.push_str(&format!("[state {state:?}]\n")),
+                SessionEvent::Playback { cycle, .. } => {
+                    log.push_str(&format!("[playback cycle {cycle:.2}]\n"));
+                }
             }
         }
         log
@@ -1013,6 +1074,134 @@ mod tests {
 
         run_eval(&sess, &mut rx, "hush").unwrap();
 
+        sess.stop();
+        assert!(wait_for_state(&sess, SessionState::Stopped, 20));
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+
+    #[test]
+    fn playback_events_share_the_session_envelope() {
+        let event = SessionEvent::Playback {
+            cycle: 42.25,
+            cps: 0.5625,
+            latency: 0.2,
+            orbits: vec![OrbitHit {
+                orbit: 0,
+                sample: "bd".to_string(),
+                hits: 2,
+                cycle: 42.25,
+            }],
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["kind"], "playback");
+        assert_eq!(json["cycle"], 42.25);
+        assert_eq!(json["cps"], 0.5625);
+        let latency = json["latency"].as_f64().unwrap();
+        assert!((latency - 0.2).abs() < 1e-6, "latency {latency}");
+        assert_eq!(json["orbits"][0]["orbit"], 0);
+        assert_eq!(json["orbits"][0]["sample"], "bd");
+        assert_eq!(json["orbits"][0]["hits"], 2);
+    }
+
+    #[test]
+    #[ignore = "requires SuperCollider + ghci/tidal — plays a pattern and checks feedback events (~20 s)"]
+    fn superdirt_session_emits_playback() {
+        let (sess, mut rx) = Session::for_test();
+        let data_dir =
+            std::env::temp_dir().join(format!("tide-session-feedback-{}", std::process::id()));
+        sess.start(Engine::SuperDirt, data_dir.clone(), AudioDevices::default())
+            .unwrap();
+        assert!(
+            wait_for_state(&sess, SessionState::Ready, 120),
+            "superdirt session startup timed out; events:\n{}",
+            drain_events(&mut rx)
+        );
+
+        run_eval(&sess, &mut rx, "setcps 0.5").unwrap();
+
+        run_eval(&sess, &mut rx, "d1 $ s \"bd*4\"").unwrap();
+
+        let mut log = String::new();
+        let mut cycles: Vec<f64> = Vec::new();
+        let mut distinct: Vec<f64> = Vec::new();
+        let mut cps = 0.0;
+        let mut hit_orbit = None;
+        let mut hit_sample = String::new();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(SessionEvent::Playback {
+                    cycle,
+                    cps: event_cps,
+                    orbits,
+                    ..
+                }) => {
+                    cycles.push(cycle);
+                    if distinct.last() != Some(&cycle) {
+                        distinct.push(cycle);
+                    }
+                    if event_cps > 0.0 {
+                        cps = event_cps;
+                    }
+                    if let Some(orbit) = orbits
+                        .iter()
+                        .find(|orbit| orbit.orbit == 0 && !orbit.sample.is_empty())
+                    {
+                        hit_orbit = Some(orbit.orbit);
+                        hit_sample = orbit.sample.clone();
+                    }
+                    if distinct.len() >= 3 && hit_orbit.is_some() {
+                        break;
+                    }
+                }
+                Ok(SessionEvent::Output { text, .. }) => log.push_str(&text),
+                Ok(_) => {}
+                Err(_) => {}
+            }
+        }
+
+        for needle in [
+            "ERROR",
+            "not understood",
+            "no synth or sample named",
+            "falls out of existing orbits",
+        ] {
+            assert!(
+                !log.contains(needle),
+                "the engine reported {needle:?} while playing:\n{log}"
+            );
+        }
+
+        assert_eq!(
+            hit_orbit,
+            Some(0),
+            "no playback hit for d1 after 15 s; events:\n{}",
+            drain_events(&mut rx)
+        );
+        assert!(
+            hit_sample == "bd" || hit_sample == "sn",
+            "unexpected sample name: {hit_sample:?}"
+        );
+        assert!(
+            distinct.len() >= 3,
+            "the cycle never advanced (three distinct values needed): {distinct:?} (snapshots: {})",
+            cycles.len()
+        );
+        assert!(
+            distinct.windows(2).all(|pair| pair[1] > pair[0]),
+            "cycles must increase: {distinct:?}"
+        );
+        assert!(
+            (cps - 0.5).abs() < 0.1,
+            "cps should follow setcps 0.5, got {cps}"
+        );
+        assert_eq!(
+            sess.state(),
+            SessionState::Ready,
+            "playback feedback must not disturb the session"
+        );
+
+        run_eval(&sess, &mut rx, "hush").unwrap();
         sess.stop();
         assert!(wait_for_state(&sess, SessionState::Stopped, 20));
         let _ = std::fs::remove_dir_all(&data_dir);
