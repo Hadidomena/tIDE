@@ -5,8 +5,8 @@ tIDE is an integrated development environment for the Tidal language.
 **Status:** editor with Tidal highlighting, live GHCi session, SuperDirt/headless engine
 orchestration, toolchain detection + diagnostics, project open/save, destructive sample transforms
 (reverse/trim/normalize/gain/fade, live-reloaded into the engine), audio export (record the live
-engine to WAV/FLAC), and a shared **library**: sample import/preview/delete, named patterns
-(save/insert/update) and pattern→sample **bounce**.
+engine to WAV/FLAC), a shared **library** (sample import/preview/delete, named patterns, pattern→sample
+bounce) and **live playback feedback** (cycle/beat metronome + the code fragment that is sounding).
 
 ## Prerequisites
 
@@ -141,6 +141,25 @@ and an optional "start the pattern first" (it evaluates the code and waits 1 s).
 live SuperDirt **master bus**, imports the take as a `custom` sample, reloads the engine and offers
 **preview**. This is a wall-clock recording of a performance — it freezes the groove rather than
 rendering it offline — so the engine must be live. The take itself stays in `…/exports/`.
+
+### Playback feedback
+
+While a SuperDirt engine is live, tIDE receives every event from the engine over a loopback socket
+and shows what is playing:
+
+- a small **metronome** in the bottom-right corner: four beat dots (4/4), the current `cycle` and the
+  tempo in `cps`. It dims when the pattern goes quiet and freezes the clock instead of pretending to
+  keep counting.
+- the **code fragment that produced each sound** flashes in the editor — the mini-notation token
+  inside `s`/`sound` (e.g. the `sn` in `s "bd sn"`), alternating two colours so repeated hits stay
+  visible. If the sample is not spelled in the code (`# s "..."` elsewhere, bank aliases, synth
+  patterns) the whole `dN` line flashes instead.
+
+Limitations worth knowing: Tidal does not send source positions, so the fragment is reconstructed
+from the buffer and the sample name — with `s "bd bd sn"` both `bd` tokens flash, they cannot be
+told apart. The playhead may lead the sound by the engine's scheduling latency. Feedback is visual
+only (an audible click would end up in export/bounce recordings) and needs the **SuperDirt** engine;
+headless sessions show no metronome.
 
 ## Quickstart (development)
 
