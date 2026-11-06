@@ -742,6 +742,7 @@ mod tests {
         assert!(script.contains("feedback.sendMsg("));
         assert!(script.contains("\"/tide/hit\""));
         assert!(script.contains("(now - lastSend) > 0.03"));
+        assert!(script.contains("if (ev.notNil)"));
         let start_at = script
             .find("~tideDirt.start(57120, 0 ! 16)")
             .expect("start call");

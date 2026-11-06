@@ -1118,8 +1118,10 @@ mod tests {
         );
 
         run_eval(&sess, &mut rx, "setcps 0.5").unwrap();
-        run_eval(&sess, &mut rx, "d1 $ s \"bd sn\"").unwrap();
 
+        run_eval(&sess, &mut rx, "d1 $ s \"bd*4\"").unwrap();
+
+        let mut log = String::new();
         let mut cycles: Vec<f64> = Vec::new();
         let mut distinct: Vec<f64> = Vec::new();
         let mut cps = 0.0;
@@ -1152,9 +1154,22 @@ mod tests {
                         break;
                     }
                 }
+                Ok(SessionEvent::Output { text, .. }) => log.push_str(&text),
                 Ok(_) => {}
                 Err(_) => {}
             }
+        }
+
+        for needle in [
+            "ERROR",
+            "not understood",
+            "no synth or sample named",
+            "falls out of existing orbits",
+        ] {
+            assert!(
+                !log.contains(needle),
+                "the engine reported {needle:?} while playing:\n{log}"
+            );
         }
 
         assert_eq!(

@@ -82,22 +82,24 @@ s.waitForBoot(
 				~tideDirt.orbits.do { |orbit, i|
 					var lastSend = 0.0;
 					orbit.defaultParentEvent[\diversion] = { |ev|
-						var e = ev.event;
-						var sample = e[\s];
-						var now = Main.elapsedTime;
-						if (sample.notNil and: { sample != \ } and: { (now - lastSend) > 0.03 }) {
-							lastSend = now;
-							try {
-								feedback.sendMsg(
-									"/tide/hit",
-									i,
-									(e[\cycle] ? 0).asString,
-									(e[\latency] ? 0).asFloat,
-									sample.asString,
-									if (e[\n].isNumber) { e[\n].asFloat } { -1 }
-								);
-							} { |err| };
-						};
+						try {
+							if (ev.notNil) {
+								var e = ev.event;
+								var sample = e[\s];
+								var now = Main.elapsedTime;
+								if (sample.notNil and: { sample != \ } and: { (now - lastSend) > 0.03 }) {
+									lastSend = now;
+									feedback.sendMsg(
+										"/tide/hit",
+										i,
+										(e[\cycle] ? 0).asString,
+										(e[\latency] ? 0).asFloat,
+										sample.asString,
+										if (e[\n].isNumber) { e[\n].asFloat } { -1 }
+									);
+								};
+							};
+						} { |err| };
 						nil;
 					};
 				};
