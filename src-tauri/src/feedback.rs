@@ -557,6 +557,48 @@ mod tests {
     }
 
     #[test]
+    fn cycle_string_keeps_precision_f32_would_lose() {
+        let precise = 123_456.123_f64;
+        let raw = packet(
+            "/tide/hit",
+            &[
+                OscArg::Int(0),
+                OscArg::Str(format!("{precise:.3}")),
+                OscArg::Float(0.2),
+                OscArg::Str("bd".to_string()),
+            ],
+        );
+        let hit = parse_packet(&raw).expect("hit");
+        assert_eq!(hit.cycle, precise, "cycle must survive as f64");
+        assert_ne!(
+            hit.cycle as f32 as f64, precise,
+            "sanity: this value is exactly what an OSC float would lose"
+        );
+
+        let mut state = PlaybackState::new();
+        state.ingest(&hit, 1.0);
+        let snapshot = state.snapshot(1.1).expect("snapshot");
+        assert_eq!(snapshot.cycle, precise);
+    }
+
+    #[test]
+    fn cps_tolerates_arrival_jitter() {
+        let mut state = PlaybackState::new();
+        let jitter = [
+            0.0, 0.018, -0.014, 0.02, -0.019, 0.011, -0.012, 0.017, -0.02, 0.015,
+        ];
+        for i in 0..30 {
+            let at = i as f64 + jitter[i % jitter.len()];
+            state.ingest(&hit(0, i as f64, "bd"), at);
+        }
+        assert!(
+            (state.cps() - 1.0).abs() < 0.05,
+            "cps should stay near 1.0 under jitter, got {}",
+            state.cps()
+        );
+    }
+
+    #[test]
     fn socket_round_trip_produces_a_snapshot() {
         let (feedback, rx) = Feedback::start().expect("start feedback");
         assert!(feedback.port() > 0);

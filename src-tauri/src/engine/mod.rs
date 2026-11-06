@@ -1090,10 +1090,16 @@ mod tests {
 
         let status = export::start_in(&dir, Some(1.5), Some("int16".to_string())).unwrap();
         assert!(status.recording);
-        thread::sleep(Duration::from_secs(3));
-
-        let decoded = crate::library::dsp::decode(Path::new(&status.path))
-            .expect("exported wav should decode");
+        let record_deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < record_deadline && !Path::new(&status.path).is_file() {
+            thread::sleep(Duration::from_millis(50));
+        }
+        thread::sleep(Duration::from_secs(2));
+        let _ = export::stop_in(&dir);
+        let take = export::finalize_in(&dir, &status.path, "wav", false)
+            .expect("the take should be finalized");
+        let decoded =
+            crate::library::dsp::decode(Path::new(&take.path)).expect("exported wav should decode");
         assert!(decoded.frames() > 0, "exported wav has no frames");
         assert!(
             decoded.duration_ms() >= 1000,
