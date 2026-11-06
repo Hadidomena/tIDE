@@ -107,7 +107,7 @@ impl Default for EngineStatus {
 }
 
 enum Cmd {
-    Start(Engine, PathBuf, Option<String>, AudioDevices),
+    Start(Engine, PathBuf, Option<String>, AudioDevices, u16),
     Stop,
 }
 
@@ -148,6 +148,7 @@ impl EngineLauncher {
         data_dir: PathBuf,
         sclang_override: Option<String>,
         devices: AudioDevices,
+        feedback_port: u16,
     ) -> Result<(), String> {
         set_status(
             &self.status,
@@ -156,7 +157,13 @@ impl EngineLauncher {
             "starting",
         );
         self.cmd_tx
-            .send(Cmd::Start(engine, data_dir, sclang_override, devices))
+            .send(Cmd::Start(
+                engine,
+                data_dir,
+                sclang_override,
+                devices,
+                feedback_port,
+            ))
             .map_err(|_| "engine worker gone".to_string())
     }
 
@@ -216,7 +223,7 @@ fn worker_loop(rx: Receiver<Cmd>, evt: Sender<SessionEvent>, status: Arc<Mutex<E
         }
 
         match rx.recv_timeout(POLL_INTERVAL) {
-            Ok(Cmd::Start(engine, dir, sclang_override, devices)) => {
+            Ok(Cmd::Start(engine, dir, sclang_override, devices, feedback_port)) => {
                 if let Some(old) = running.take() {
                     shutdown(old, &evt, &status, "restarted");
                 }
@@ -225,7 +232,7 @@ fn worker_loop(rx: Receiver<Cmd>, evt: Sender<SessionEvent>, status: Arc<Mutex<E
                     &dir,
                     sclang_override,
                     devices,
-                    0,
+                    feedback_port,
                     &rx,
                     &evt,
                     &status,
@@ -894,6 +901,7 @@ mod tests {
                 dir.clone(),
                 None,
                 AudioDevices::default(),
+                0,
             )
             .unwrap();
         let deadline = Instant::now() + Duration::from_secs(90);
@@ -973,6 +981,7 @@ mod tests {
                 dir.clone(),
                 None,
                 AudioDevices::default(),
+                0,
             )
             .unwrap();
 
@@ -1059,6 +1068,7 @@ mod tests {
                 dir.clone(),
                 None,
                 AudioDevices::default(),
+                0,
             )
             .unwrap();
 
@@ -1120,6 +1130,7 @@ mod tests {
                 dir.clone(),
                 None,
                 AudioDevices::default(),
+                0,
             )
             .unwrap();
 
