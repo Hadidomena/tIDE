@@ -1,5 +1,6 @@
 pub mod engine;
 pub mod export;
+pub mod feedback;
 pub mod library;
 pub mod project;
 pub mod session;

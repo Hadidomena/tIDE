@@ -10,9 +10,16 @@
 	import { tidalCompletion } from './vocabulary';
 	import { tidalLanguage } from './tidal-mode';
 
+	interface FlashRange {
+		from: number;
+		to: number;
+		seq: number;
+	}
+
 	interface Props {
 		content?: string;
 		errorLine?: number | null;
+		flashRanges?: FlashRange[];
 		onEval?: (code: string, line: number) => void;
 		onRunAll?: (code: string) => void;
 		onHush?: () => void;
@@ -21,6 +28,7 @@
 	let {
 		content = $bindable(''),
 		errorLine = null,
+		flashRanges = [],
 		onEval = () => {},
 		onRunAll = () => {},
 		onHush = () => {}
@@ -102,6 +110,36 @@
 		provide: (field) => EditorView.decorations.from(field)
 	});
 
+	const setFlash = StateEffect.define<FlashRange[] | null>();
+	const flashMark = (seq: number) =>
+		Decoration.mark({ class: seq % 2 ? 'cm-flash cm-flash-alt' : 'cm-flash' });
+
+	const flashField = StateField.define<DecorationSet>({
+		create: () => Decoration.none,
+		update(decorations, tr) {
+			let next = decorations.map(tr.changes);
+			for (const effect of tr.effects) {
+				if (!effect.is(setFlash)) continue;
+				if (!effect.value || effect.value.length === 0) return Decoration.none;
+				const docLength = tr.state.doc.length;
+				const ranges = effect.value
+					.map((range) => ({
+						...range,
+						from: Math.min(Math.max(range.from, 0), docLength),
+						to: Math.min(Math.max(range.to, 0), docLength)
+					}))
+					.filter((range) => range.to > range.from);
+				if (ranges.length === 0) return Decoration.none;
+				next = Decoration.set(
+					ranges.map((range) => flashMark(range.seq).range(range.from, range.to)),
+					true
+				);
+			}
+			return next;
+		},
+		provide: (field) => EditorView.decorations.from(field)
+	});
+
 	$effect(() => {
 		if (!host) return;
 		view = new EditorView({
@@ -115,6 +153,7 @@
 					syntaxHighlighting(synthwaveHighlight),
 					EditorView.lineWrapping,
 					errorLineField,
+					flashField,
 					Prec.high(
 						keymap.of([
 							{
@@ -160,6 +199,11 @@
 	$effect(() => {
 		if (!view) return;
 		view.dispatch({ effects: setErrorLine.of(errorLine ?? null) });
+	});
+
+	$effect(() => {
+		if (!view) return;
+		view.dispatch({ effects: setFlash.of(flashRanges.length ? flashRanges : null) });
 	});
 
 	$effect(() => {

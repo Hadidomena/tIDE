@@ -16,16 +16,32 @@ export interface EngineStatus {
 	detail: string;
 }
 
+export interface PlaybackOrbit {
+	orbit: number;
+	sample: string;
+	hits: number;
+	cycle: number;
+}
+
+export interface Playback {
+	cycle: number;
+	cps: number;
+	latency: number;
+	orbits: PlaybackOrbit[];
+}
+
 type WireEvent =
 	| { kind: 'state'; state: SessionState }
 	| { kind: 'output'; stream: 'stdout' | 'stderr' | 'engine'; text: string }
-	| ({ kind: 'engine' } & EngineStatus);
+	| ({ kind: 'engine' } & EngineStatus)
+	| ({ kind: 'playback' } & Playback);
 
 const MAX_CHUNKS = 2000;
 
 class SessionModel {
 	state = $state<SessionState>('stopped');
 	engine = $state<EngineStatus | null>(null);
+	playback = $state<Playback | null>(null);
 	errorLine = $state<number | null>(null);
 	chunks = $state<Chunk[]>([]);
 	private connected = false;
@@ -51,10 +67,22 @@ class SessionModel {
 	private handle(ev: WireEvent) {
 		if (ev.kind === 'state') {
 			this.state = ev.state;
+			if (ev.state !== 'ready' && ev.state !== 'busy') {
+				this.playback = null;
+			}
 			return;
 		}
 		if (ev.kind === 'engine') {
 			this.engine = { engine: ev.engine, status: ev.status, detail: ev.detail };
+			return;
+		}
+		if (ev.kind === 'playback') {
+			this.playback = {
+				cycle: ev.cycle,
+				cps: ev.cps,
+				latency: ev.latency,
+				orbits: ev.orbits
+			};
 			return;
 		}
 		this.push(ev.stream, ev.text);
