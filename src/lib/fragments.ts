@@ -16,7 +16,7 @@ interface SourceLine {
 
 const ORBIT_START = /^[ \t]*d(1[0-6]|[1-9])\b/;
 const SOUND_LITERAL = /\b(?:s|sound)\s+"((?:[^"\\]|\\.)*)"/g;
-const TOKEN_MODIFIER = /[:*!?@/]/;
+const TOKEN_MODIFIER = /[:*!?@/^]/;
 
 export function indexOrbits(source: string): Map<number, OrbitCode> {
 	const lines = splitLines(source);
@@ -31,9 +31,21 @@ export function indexOrbits(source: string): Map<number, OrbitCode> {
 		const orbit = Number(match[1]) - 1;
 		let end = i + 1;
 		while (end < lines.length) {
-			const next = lines[end].text;
-			if (next.trim() !== '' && !/^[ \t]/.test(next)) break;
-			end += 1;
+			const line = lines[end];
+			const trimmed = line.text.trim();
+			if (trimmed === '' || /^[ \t]/.test(line.text)) {
+				end += 1;
+				continue;
+			}
+			if (trimmed.startsWith('--')) {
+				let look = end + 1;
+				while (look < lines.length && lines[look].text.trim() === '') look += 1;
+				if (look < lines.length && /^[ \t]/.test(lines[look].text)) {
+					end += 1;
+					continue;
+				}
+			}
+			break;
 		}
 
 		const statement = { from: lines[i].from, to: lines[end - 1].to };
@@ -68,18 +80,25 @@ export function rangesFor(
 function tokenNames(token: string): string[] {
 	const names = new Set<string>();
 	const add = (name: string) => {
+		// `~` (rest) and `_` (elongate) are mini-notation, not sample names.
 		if (name && /[a-z0-9]/i.test(name)) names.add(name);
 	};
-	add(normalizeToken(token));
-	const colon = token.lastIndexOf(':');
-	if (colon >= 0) add(normalizeToken(token.slice(colon + 1)));
+	// `[bd,hh]` stacks two samples in one token.
+	for (const part of token.split(',')) {
+		add(normalizeToken(part));
+		// `s "RolandTR808:bd"` — SuperDirt reports the sample as `bd` (or `RolandTR808_bd`).
+		const colon = part.lastIndexOf(':');
+		if (colon >= 0) add(normalizeToken(part.slice(colon + 1)));
+	}
 	return [...names];
 }
 
 export function normalizeToken(token: string): string {
 	const cut = token.search(TOKEN_MODIFIER);
 	const base = cut >= 0 ? token.slice(0, cut) : token;
-	return base.replace(/[[\](){}^_,]/g, '').trim();
+	// Brackets/braces are mini-notation grouping; `_` and `,` are meaningful (elongate/stack) and
+	// are handled separately, so they must not be applied to sample names.
+	return base.replace(/[[\](){}]/g, '').trim();
 }
 
 export function normalizeSample(sample: string): string {
@@ -90,7 +109,9 @@ export function normalizeSample(sample: string): string {
 
 function collectTokens(source: string, statement: TextRange): Map<string, TextRange[]> {
 	const tokens = new Map<string, TextRange[]>();
-	const text = source.slice(statement.from, statement.to);
+	// Comments keep their length so ranges still index the original text, but their content must
+	// not be matched (`-- s "sn"` inside a block is not a playing fragment).
+	const text = maskLineComments(source.slice(statement.from, statement.to));
 	SOUND_LITERAL.lastIndex = 0;
 	let literal: RegExpExecArray | null;
 	while ((literal = SOUND_LITERAL.exec(text))) {
@@ -111,6 +132,16 @@ function collectTokens(source: string, statement: TextRange): Map<string, TextRa
 		}
 	}
 	return tokens;
+}
+
+function maskLineComments(text: string): string {
+	return text
+		.split('\n')
+		.map((line) => {
+			const at = line.indexOf('--');
+			return at >= 0 ? line.slice(0, at) + ' '.repeat(line.length - at) : line;
+		})
+		.join('\n');
 }
 
 function splitLines(source: string): SourceLine[] {

@@ -1107,7 +1107,6 @@ mod tests {
             decoded.duration_ms()
         );
 
-        let _ = export::stop_in(&dir);
         launcher.stop();
         let _ = std::fs::remove_dir_all(&dir);
     }

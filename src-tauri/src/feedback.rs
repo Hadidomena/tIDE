@@ -53,14 +53,12 @@ impl OscArg {
     }
 }
 
-/// One parsed event from SuperDirt.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Hit {
     pub orbit: u8,
     pub cycle: f64,
     pub latency: f32,
     pub sample: String,
-    pub note: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -261,15 +259,19 @@ fn run_loop(
 ) {
     let started = Instant::now();
     let mut buf = [0u8; 2048];
+    let mut next_emit = Instant::now();
     loop {
         if stop.load(Ordering::Relaxed) {
             break;
         }
-        let now = started.elapsed().as_secs_f64();
-        if let Some(snapshot) = state.lock().unwrap().snapshot(now)
-            && tx.send(snapshot).is_err()
-        {
-            break;
+        if Instant::now() >= next_emit {
+            let now = started.elapsed().as_secs_f64();
+            if let Some(snapshot) = state.lock().unwrap().snapshot(now)
+                && tx.send(snapshot).is_err()
+            {
+                break;
+            }
+            next_emit = Instant::now() + TICK;
         }
         match socket.recv_from(&mut buf) {
             Ok((size, _)) => {
@@ -299,17 +301,11 @@ pub fn parse_packet(packet: &[u8]) -> Option<Hit> {
     }
     let latency = message.args.get(2)?.as_f32()?;
     let sample = message.args.get(3)?.as_str()?.to_string();
-    let note = message
-        .args
-        .get(4)
-        .and_then(|arg| arg.as_f32())
-        .unwrap_or(-1.0);
     Some(Hit {
         orbit: orbit as u8,
         cycle,
         latency,
         sample,
-        note,
     })
 }
 
@@ -424,7 +420,6 @@ mod tests {
             cycle,
             latency: 0.2,
             sample: sample.to_string(),
-            note: -1.0,
         }
     }
 
@@ -463,7 +458,6 @@ mod tests {
         assert_eq!(hit.orbit, 0);
         assert_eq!(hit.cycle, 42.25);
         assert_eq!(hit.sample, "bd");
-        assert_eq!(hit.note, 60.0);
     }
 
     #[test]
@@ -596,6 +590,44 @@ mod tests {
             "cps should stay near 1.0 under jitter, got {}",
             state.cps()
         );
+    }
+
+    #[test]
+    fn burst_of_hits_is_coalesced_into_few_snapshots() {
+        let (feedback, rx) = Feedback::start().expect("start feedback");
+        let sender = UdpSocket::bind(("127.0.0.1", 0)).unwrap();
+        let raw = packet(
+            "/tide/hit",
+            &[
+                OscArg::Int(0),
+                OscArg::Str("1.0".to_string()),
+                OscArg::Float(0.0),
+                OscArg::Str("bd".to_string()),
+                OscArg::Float(-1.0),
+            ],
+        );
+        for _ in 0..300 {
+            sender
+                .send_to(&raw, ("127.0.0.1", feedback.port()))
+                .expect("send hit");
+        }
+
+        let deadline = Instant::now() + Duration::from_millis(250);
+        let mut snapshots = 0;
+        let mut hits = 0u32;
+        while Instant::now() < deadline {
+            if let Ok(snapshot) = rx.recv_timeout(Duration::from_millis(20)) {
+                snapshots += 1;
+                hits += snapshot.orbits.iter().map(|orbit| orbit.hits).sum::<u32>();
+            }
+        }
+        assert!(snapshots >= 1, "no snapshot after the burst");
+        assert!(
+            snapshots < 60,
+            "300 hits produced {snapshots} snapshots in 250 ms — coalescing is broken"
+        );
+        assert!(hits > 0, "hits must be counted, not dropped");
+        feedback.stop();
     }
 
     #[test]

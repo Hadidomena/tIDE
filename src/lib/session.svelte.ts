@@ -42,7 +42,6 @@ class SessionModel {
 	state = $state<SessionState>('stopped');
 	engine = $state<EngineStatus | null>(null);
 	playback = $state<Playback | null>(null);
-	playbackAt = $state(0);
 	errorLine = $state<number | null>(null);
 	chunks = $state<Chunk[]>([]);
 	private connected = false;
@@ -70,7 +69,6 @@ class SessionModel {
 			this.state = ev.state;
 			if (ev.state !== 'ready' && ev.state !== 'busy') {
 				this.playback = null;
-				this.playbackAt = 0;
 			}
 			return;
 		}
@@ -85,7 +83,6 @@ class SessionModel {
 				latency: ev.latency,
 				orbits: ev.orbits
 			};
-			this.playbackAt = Date.now();
 			return;
 		}
 		this.push(ev.stream, ev.text);
