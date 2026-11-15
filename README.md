@@ -45,6 +45,8 @@ Open the **Diagnostics** pane in the app to see exactly what is detected and wha
 | `Cmd/Ctrl+Shift+S`                       | save as                                    |
 | `Cmd/Ctrl+O`                             | open a file                                |
 | `Cmd/Ctrl+Shift+P`                       | save the selection as a pattern            |
+| `Alt+P` (or `Alt+Enter`) in autocomplete | preview the highlighted sound              |
+| `→` in autocomplete                      | take the highlighted completion            |
 | `Tab` / `Shift+Tab`                      | accept autocomplete (or indent) / outdent  |
 | `Enter` in the console row               | evaluate the typed line                    |
 | `Cmd/Ctrl+Z`, `Shift+Cmd/Ctrl+Z`         | undo / redo (CodeMirror defaults)          |
@@ -123,6 +125,10 @@ mutually exclusive with the transform and export panels.
 - Rows show name, duration and source (`custom` / `derived`). **preview** plays `once $ s "name"`,
   **transform** hands the file to the transform panel as its source, **delete** removes the folder
   and the DB row.
+- Inside an `s "…"` / `sound "…"` string the editor autocompletes sound names — your library
+  samples first, then Dirt-Samples, then the built-in defaults (`bd`, `sn`, `hh`, …). The info panel
+  has a **▶ play** button (`Alt+P` on the highlighted entry) that auditions the sound with
+  `once $ s "name"` without inserting anything, so you can browse by ear while typing.
 - A live SuperDirt engine reloads the sample trees automatically (no restart); deleting files does
   not unload buffers that are already in the engine — reload/restart to free the name.
 
