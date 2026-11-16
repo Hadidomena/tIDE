@@ -45,7 +45,8 @@ Open the **Diagnostics** pane in the app to see exactly what is detected and wha
 | `Cmd/Ctrl+Shift+S`                       | save as                                    |
 | `Cmd/Ctrl+O`                             | open a file                                |
 | `Cmd/Ctrl+Shift+P`                       | save the selection as a pattern            |
-| `Alt+P` (or `Alt+Enter`) in autocomplete | preview the highlighted sound              |
+| `Ctrl+P` in autocomplete                 | preview the highlighted sound              |
+| `Alt+Enter` in autocomplete              | preview the highlighted sound (alias)      |
 | `→` in autocomplete                      | take the highlighted completion            |
 | `Tab` / `Shift+Tab`                      | accept autocomplete (or indent) / outdent  |
 | `Enter` in the console row               | evaluate the typed line                    |

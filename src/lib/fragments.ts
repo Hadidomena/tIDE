@@ -80,24 +80,37 @@ export function rangesFor(
 function tokenNames(token: string): string[] {
 	const names = new Set<string>();
 	const add = (name: string) => {
-		// `~` (rest) and `_` (elongate) are mini-notation, not sample names.
 		if (name && /[a-z0-9]/i.test(name)) names.add(name);
 	};
-	// `[bd,hh]` stacks two samples in one token.
 	for (const part of token.split(',')) {
 		add(normalizeToken(part));
-		// `s "RolandTR808:bd"` — SuperDirt reports the sample as `bd` (or `RolandTR808_bd`).
 		const colon = part.lastIndexOf(':');
 		if (colon >= 0) add(normalizeToken(part.slice(colon + 1)));
 	}
 	return [...names];
 }
 
+export function insideSoundLiteral(textBefore: string): boolean {
+	const code = stripLineComment(textBefore);
+	return /(?:^|[\s$(#])(?:s|sound)\s*"[^"]*$/.test(code);
+}
+
+function stripLineComment(text: string): string {
+	let inString = false;
+	for (let i = 0; i < text.length; i += 1) {
+		const ch = text[i];
+		if (ch === '"') {
+			inString = !inString;
+		} else if (!inString && ch === '-' && text[i + 1] === '-') {
+			return text.slice(0, i);
+		}
+	}
+	return text;
+}
+
 export function normalizeToken(token: string): string {
 	const cut = token.search(TOKEN_MODIFIER);
 	const base = cut >= 0 ? token.slice(0, cut) : token;
-	// Brackets/braces are mini-notation grouping; `_` and `,` are meaningful (elongate/stack) and
-	// are handled separately, so they must not be applied to sample names.
 	return base.replace(/[[\](){}]/g, '').trim();
 }
 
@@ -109,8 +122,6 @@ export function normalizeSample(sample: string): string {
 
 function collectTokens(source: string, statement: TextRange): Map<string, TextRange[]> {
 	const tokens = new Map<string, TextRange[]>();
-	// Comments keep their length so ranges still index the original text, but their content must
-	// not be matched (`-- s "sn"` inside a block is not a playing fragment).
 	const text = maskLineComments(source.slice(statement.from, statement.to));
 	SOUND_LITERAL.lastIndex = 0;
 	let literal: RegExpExecArray | null;

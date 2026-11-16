@@ -3,10 +3,18 @@
 	import { Decoration, type DecorationSet, EditorView, keymap } from '@codemirror/view';
 	import { HighlightStyle, LanguageSupport, syntaxHighlighting } from '@codemirror/language';
 	import { tags } from '@lezer/highlight';
-	import { acceptCompletion, autocompletion, completeAnyWord } from '@codemirror/autocomplete';
+	import {
+		acceptCompletion,
+		autocompletion,
+		completeAnyWord,
+		completionStatus,
+		currentCompletions,
+		selectedCompletionIndex
+	} from '@codemirror/autocomplete';
 	import { indentLess, indentMore } from '@codemirror/commands';
 	import { basicSetup } from 'codemirror';
 	import { untrack } from 'svelte';
+	import { sampleCompletion, type SampleCompletion } from './samples';
 	import { tidalCompletion } from './vocabulary';
 	import { tidalLanguage } from './tidal-mode';
 
@@ -23,6 +31,7 @@
 		onEval?: (code: string, line: number) => void;
 		onRunAll?: (code: string) => void;
 		onHush?: () => void;
+		onPreviewSample?: (name: string) => void;
 	}
 
 	let {
@@ -31,14 +40,27 @@
 		flashRanges = [],
 		onEval = () => {},
 		onRunAll = () => {},
-		onHush = () => {}
+		onHush = () => {},
+		onPreviewSample = () => {}
 	}: Props = $props();
 
 	let host: HTMLDivElement | undefined = $state();
 	let view: EditorView | undefined;
 
+	const samples = sampleCompletion((name) => onPreviewSample(name));
+
+	function previewSelectedSample(v: EditorView): boolean {
+		if (completionStatus(v.state) !== 'active') return false;
+		const options = currentCompletions(v.state) as readonly SampleCompletion[];
+		const index = selectedCompletionIndex(v.state);
+		const chosen = index === null ? options[0] : options[index];
+		if (!chosen?.sample) return false;
+		onPreviewSample(chosen.sample);
+		return true;
+	}
+
 	const tidalSupport = new LanguageSupport(tidalLanguage, [
-		autocompletion({ override: [tidalCompletion, completeAnyWord] }),
+		autocompletion({ override: [samples, tidalCompletion, completeAnyWord] }),
 		Prec.high(
 			keymap.of([
 				{ key: 'Tab', run: (v) => acceptCompletion(v) || indentMore(v) },
@@ -175,6 +197,18 @@
 								run: evalLineOrSelection
 							},
 							{
+								key: 'Ctrl-p',
+								run: previewSelectedSample
+							},
+							{
+								key: 'Alt-Enter',
+								run: previewSelectedSample
+							},
+							{
+								key: 'ArrowRight',
+								run: (v) => (completionStatus(v.state) === 'active' ? acceptCompletion(v) : false)
+							},
+							{
 								key: 'Mod-.',
 								preventDefault: true,
 								run: () => {
@@ -284,5 +318,34 @@
 	:global(.cm-completionDetail) {
 		color: var(--sw-muted);
 		font-style: italic;
+	}
+
+	:global(.cm-sample-info) {
+		font-size: 0.72rem;
+		max-width: 22rem;
+	}
+
+	:global(.cm-sample-path) {
+		color: var(--sw-muted);
+		font-size: 0.65rem;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	:global(.cm-sample-play) {
+		margin-top: 0.3rem;
+		font: inherit;
+		font-size: 0.7rem;
+		padding: 0.1rem 0.45rem;
+		border: 1px solid var(--sw-border);
+		border-radius: 4px;
+		background: transparent;
+		color: var(--sw-blue);
+		cursor: pointer;
+	}
+
+	:global(.cm-sample-play:hover) {
+		background: color-mix(in srgb, var(--sw-blue) 15%, transparent);
 	}
 </style>

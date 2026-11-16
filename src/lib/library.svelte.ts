@@ -108,6 +108,10 @@ export function toggleLibrary() {
 	openLibrary(library.category);
 }
 
+export function ensureSamplesLoaded() {
+	if (library.samples.length === 0 && !library.loading) void refresh();
+}
+
 export async function refresh() {
 	library.loading = true;
 	library.error = '';

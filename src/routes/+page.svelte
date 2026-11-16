@@ -48,6 +48,7 @@
 		beginPatternFromSelection,
 		beginBounce,
 		bindEditor,
+		ensureSamplesLoaded,
 		bounceBusy,
 		cancelBounce,
 		cancelPendingPattern,
@@ -104,6 +105,8 @@ d1 $ s "bd sn:1 ~ hh"
 			await initDiagnostics();
 			await session.connect(resolveEngine(), inputChoice(), diagnostics.outputDevice || null);
 			void detectToolchain();
+			ensureSamplesLoaded();
+			void loadDirtGroups();
 		})();
 	});
 
@@ -242,6 +245,14 @@ d1 $ s "bd sn:1 ~ hh"
 
 	function handleRunAll(code: string) {
 		void session.runFile(code);
+	}
+
+	function handlePreviewSample(name: string) {
+		if (session.state !== 'ready') {
+			session.notify('start the session to preview sounds');
+			return;
+		}
+		previewSample(name);
 	}
 
 	async function copyHint(text: string) {
@@ -392,6 +403,7 @@ d1 $ s "bd sn:1 ~ hh"
 			onEval={handleEval}
 			onRunAll={handleRunAll}
 			onHush={handleHush}
+			onPreviewSample={handlePreviewSample}
 		/>
 	</section>
 	{#if showLogs}
