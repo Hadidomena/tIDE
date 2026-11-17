@@ -81,7 +81,7 @@ s.waitForBoot(
 				feedback = NetAddr("127.0.0.1", feedbackPort);
 				~tideDirt.orbits.do { |orbit, i|
 					var lastSend = 0.0;
-					orbit.defaultParentEvent[\diversion] = { |ev|
+					orbit.defaultParentEvent[\play] = { |ev|
 						try {
 							if (ev.notNil) {
 								var e = ev.event;
@@ -95,7 +95,7 @@ s.waitForBoot(
 										(e[\cycle] ? 0).asString,
 										(e[\latency] ? 0).asFloat,
 										sample.asString,
-										if (e[\n].isNumber) { e[\n].asFloat } { -1 }
+										(e[\sustain] ? 0).asFloat
 									);
 								};
 							};

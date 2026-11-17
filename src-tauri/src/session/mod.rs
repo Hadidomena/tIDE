@@ -1090,6 +1090,7 @@ mod tests {
                 sample: "bd".to_string(),
                 hits: 2,
                 cycle: 42.25,
+                sustain: 0.25,
             }],
         };
         let json = serde_json::to_value(&event).unwrap();
@@ -1101,6 +1102,8 @@ mod tests {
         assert_eq!(json["orbits"][0]["orbit"], 0);
         assert_eq!(json["orbits"][0]["sample"], "bd");
         assert_eq!(json["orbits"][0]["hits"], 2);
+        let sustain = json["orbits"][0]["sustain"].as_f64().unwrap();
+        assert!((sustain - 0.25).abs() < 1e-6, "sustain {sustain}");
     }
 
     #[test]
@@ -1127,6 +1130,7 @@ mod tests {
         let mut cps = 0.0;
         let mut hit_orbit = None;
         let mut hit_sample = String::new();
+        let mut hit_sustain: Option<f32> = None;
         let deadline = Instant::now() + Duration::from_secs(20);
         while Instant::now() < deadline {
             match rx.recv_timeout(Duration::from_millis(500)) {
@@ -1149,6 +1153,7 @@ mod tests {
                     {
                         hit_orbit = Some(orbit.orbit);
                         hit_sample = orbit.sample.clone();
+                        hit_sustain = Some(orbit.sustain);
                     }
                     if distinct.len() >= 3 && hit_orbit.is_some() {
                         break;
@@ -1181,6 +1186,10 @@ mod tests {
         assert!(
             hit_sample == "bd" || hit_sample == "sn",
             "unexpected sample name: {hit_sample:?}"
+        );
+        assert!(
+            hit_sustain.is_some_and(|sustain| sustain > 0.0),
+            "the hook must report SuperDirt's sustain (got {hit_sustain:?})"
         );
         assert!(
             distinct.len() >= 3,

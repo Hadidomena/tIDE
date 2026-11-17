@@ -4,6 +4,14 @@ export interface TextRange {
 }
 
 export interface OrbitCode {
+	orbit: number;
+	startLine: number;
+	line: TextRange;
+	tokens: Map<string, TextRange[]>;
+}
+
+interface Binding {
+	name: string;
 	line: TextRange;
 	tokens: Map<string, TextRange[]>;
 }
@@ -15,12 +23,15 @@ interface SourceLine {
 }
 
 const ORBIT_START = /^[ \t]*d(1[0-6]|[1-9])\b/;
+const LET_DEF = /^[ \t]*let\s+([a-z_][A-Za-z0-9_']*)\s*=/;
+const IDENTIFIER = /\b[a-z_][A-Za-z0-9_']*\b/g;
 const SOUND_LITERAL = /\b(?:s|sound)\s+"((?:[^"\\]|\\.)*)"/g;
 const TOKEN_MODIFIER = /[:*!?@/^]/;
 
-export function indexOrbits(source: string): Map<number, OrbitCode> {
+export function indexOrbits(source: string): OrbitIndex {
 	const lines = splitLines(source);
-	const index = new Map<number, OrbitCode>();
+	const bindings = indexBindings(lines, source);
+	const index: OrbitIndex = { byOrbit: new Map() };
 	let i = 0;
 	while (i < lines.length) {
 		const match = ORBIT_START.exec(lines[i].text);
@@ -29,40 +40,105 @@ export function indexOrbits(source: string): Map<number, OrbitCode> {
 			continue;
 		}
 		const orbit = Number(match[1]) - 1;
-		let end = i + 1;
-		while (end < lines.length) {
-			const line = lines[end];
-			const trimmed = line.text.trim();
-			if (trimmed === '' || /^[ \t]/.test(line.text)) {
-				end += 1;
-				continue;
-			}
-			if (trimmed.startsWith('--')) {
-				let look = end + 1;
-				while (look < lines.length && lines[look].text.trim() === '') look += 1;
-				if (look < lines.length && /^[ \t]/.test(lines[look].text)) {
-					end += 1;
-					continue;
-				}
-			}
-			break;
-		}
-
+		const end = statementEnd(lines, i);
 		const statement = { from: lines[i].from, to: lines[end - 1].to };
-		const tokens = collectTokens(source, statement);
-		index.set(orbit, { line: { from: lines[i].from, to: lines[i].to }, tokens });
+		const own = collectTokens(source, statement);
+		const used = referencedBindings(lines, source, i, end, bindings);
+		const tokens = new Map(own);
+		for (const binding of used) {
+			for (const [name, ranges] of binding.tokens) {
+				if (!tokens.has(name)) tokens.set(name, ranges);
+			}
+		}
+		const line =
+			own.size === 0 && used.length > 0 ? used[0].line : { from: lines[i].from, to: lines[i].to };
+		const statements = index.byOrbit.get(orbit) ?? [];
+		statements.push({ orbit, startLine: i + 1, line, tokens });
+		index.byOrbit.set(orbit, statements);
 		i = end;
 	}
 	return index;
 }
 
+function statementEnd(lines: SourceLine[], start: number): number {
+	let end = start + 1;
+	while (end < lines.length) {
+		const line = lines[end];
+		const trimmed = line.text.trim();
+		if (trimmed === '' || /^[ \t]/.test(line.text)) {
+			end += 1;
+			continue;
+		}
+		if (trimmed.startsWith('--')) {
+			let look = end + 1;
+			while (look < lines.length && lines[look].text.trim() === '') look += 1;
+			if (look < lines.length && /^[ \t]/.test(lines[look].text)) {
+				end += 1;
+				continue;
+			}
+		}
+		break;
+	}
+	return end;
+}
+
+export interface OrbitIndex {
+	byOrbit: Map<number, OrbitCode[]>;
+}
+
+function indexBindings(lines: SourceLine[], source: string): Map<string, Binding> {
+	const bindings = new Map<string, Binding>();
+	let i = 0;
+	while (i < lines.length) {
+		const match = LET_DEF.exec(lines[i].text);
+		if (!match) {
+			i += 1;
+			continue;
+		}
+		const end = statementEnd(lines, i);
+		const statement = { from: lines[i].from, to: lines[end - 1].to };
+		bindings.set(match[1], {
+			name: match[1],
+			line: { from: lines[i].from, to: lines[i].to },
+			tokens: collectTokens(source, statement)
+		});
+		i = end;
+	}
+	return bindings;
+}
+
+function referencedBindings(
+	lines: SourceLine[],
+	source: string,
+	start: number,
+	end: number,
+	bindings: Map<string, Binding>
+): Binding[] {
+	if (bindings.size === 0) return [];
+	const text = maskLineComments(source.slice(lines[start].from, lines[end - 1].to));
+	const used: Binding[] = [];
+	const seen = new Set<string>();
+	for (const match of text.matchAll(IDENTIFIER)) {
+		const binding = bindings.get(match[0]);
+		if (binding && !seen.has(binding.name)) {
+			seen.add(binding.name);
+			used.push(binding);
+		}
+	}
+	return used;
+}
+
 export function rangesFor(
-	index: Map<number, OrbitCode>,
+	index: OrbitIndex,
 	orbit: number,
-	sample: string
+	sample: string,
+	line?: number
 ): TextRange[] {
-	const entry = index.get(orbit);
-	if (!entry) return [];
+	const statements = index.byOrbit.get(orbit);
+	if (!statements || statements.length === 0) return [];
+	const entry =
+		(line === undefined ? undefined : statements.find((s) => s.startLine === line)) ??
+		statements[statements.length - 1];
 	const name = normalizeSample(sample);
 	if (!name) return [entry.line];
 

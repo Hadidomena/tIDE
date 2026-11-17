@@ -738,16 +738,17 @@ mod tests {
         assert!(script.contains("var feedbackPort = 57123;"));
         assert!(script.contains("if (feedbackPort > 0)"));
         assert!(script.contains("NetAddr(\"127.0.0.1\", feedbackPort)"));
-        assert!(script.contains(r#"defaultParentEvent[\diversion]"#));
+        assert!(script.contains(r#"defaultParentEvent[\play]"#));
         assert!(script.contains("feedback.sendMsg("));
         assert!(script.contains("\"/tide/hit\""));
         assert!(script.contains("(now - lastSend) > 0.03"));
+        assert!(script.contains("(e[\\sustain] ? 0).asFloat"));
         assert!(script.contains("if (ev.notNil)"));
         let start_at = script
             .find("~tideDirt.start(57120, 0 ! 16)")
             .expect("start call");
         let hook_at = script
-            .find(r#"defaultParentEvent[\diversion]"#)
+            .find(r#"defaultParentEvent[\play]"#)
             .expect("feedback hook");
         assert!(
             hook_at > start_at,

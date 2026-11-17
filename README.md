@@ -159,8 +159,11 @@ and shows what is playing:
   keep counting.
 - the **code fragment that produced each sound** flashes in the editor — the mini-notation token
   inside `s`/`sound` (e.g. the `sn` in `s "bd sn"`), alternating two colours so repeated hits stay
-  visible. If the sample is not spelled in the code (`# s "..."` elsewhere, bank aliases, synth
-  patterns) the whole `dN` line flashes instead.
+  visible. The highlight lasts as long as the sound (SuperDirt's `sustain`, clamped to 90–1200 ms).
+  Patterns built through a `let` binding flash the token inside the definition (`d1 $ p` → the
+  `s "..."` in `let p = ...`), and the statement you evaluated **last** wins over the last one in
+  the file. If the sample is not spelled in the code (bank aliases, synth patterns) the whole `dN`
+  line flashes instead.
 
 Limitations worth knowing: Tidal does not send source positions, so the fragment is reconstructed
 from the buffer and the sample name — with `s "bd bd sn"` both `bd` tokens flash, they cannot be

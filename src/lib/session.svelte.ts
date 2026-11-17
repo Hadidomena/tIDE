@@ -21,6 +21,7 @@ export interface PlaybackOrbit {
 	sample: string;
 	hits: number;
 	cycle: number;
+	sustain: number;
 }
 
 export interface Playback {

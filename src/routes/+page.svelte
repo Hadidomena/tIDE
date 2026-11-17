@@ -91,9 +91,10 @@ d1 $ s "bd sn:1 ~ hh"
 
 	let consoleEl: HTMLPreElement | undefined = $state();
 	let editor: EditorApi | undefined = $state();
-	let flashes = $state<{ from: number; to: number; seq: number }[]>([]);
+	let flashes = $state<{ from: number; to: number; seq: number; durationMs: number }[]>([]);
 	let flashSeq = 0;
 	let lastFlashSnapshot: unknown = null;
+	let lastEvalLine: Record<number, number> = {};
 	let stickToBottom = true;
 	let lineIn = $state('');
 	let showLogs = $state(false);
@@ -166,27 +167,29 @@ d1 $ s "bd sn:1 ~ hh"
 		syncClock(snapshot);
 	});
 
-	// Flash the code fragment that produced each hit (Strudel-style, fragment by fragment).
 	$effect(() => {
 		const snapshot = session.playback;
 		if (!snapshot || snapshot.orbits.length === 0) return;
 		if (snapshot === lastFlashSnapshot) return;
 		lastFlashSnapshot = snapshot;
 
-		const next: { from: number; to: number; seq: number }[] = [];
+		const next: { from: number; to: number; seq: number; durationMs: number }[] = [];
 		for (const orbit of snapshot.orbits) {
 			if (orbit.hits <= 0) continue;
-			for (const range of rangesFor(orbitCode, orbit.orbit, orbit.sample)) {
-				if (range.to > range.from) next.push({ ...range, seq: ++flashSeq });
+			const durationMs = Math.round(Math.min(Math.max(orbit.sustain * 1000, 90), 1200));
+			const line = lastEvalLine[orbit.orbit];
+			for (const range of rangesFor(orbitCode, orbit.orbit, orbit.sample, line)) {
+				if (range.to > range.from) next.push({ ...range, seq: ++flashSeq, durationMs });
 			}
 		}
 		if (next.length === 0) return;
 
+		const holdMs = Math.max(...next.map((flash) => flash.durationMs)) + 120;
 		const mine = new Set(next.map((flash) => flash.seq));
 		flashes = [...untrack(() => flashes), ...next];
 		setTimeout(() => {
 			flashes = flashes.filter((flash) => !mine.has(flash.seq));
-		}, 700);
+		}, holdMs);
 	});
 
 	$effect(() => {
@@ -235,7 +238,16 @@ d1 $ s "bd sn:1 ~ hh"
 		}
 	});
 
+	function recordEval(code: string, line: number) {
+		const lines = code.split('\n');
+		for (let i = 0; i < lines.length; i += 1) {
+			const match = /^[ \t]*d(1[0-6]|[1-9])\b/.exec(lines[i]);
+			if (match) lastEvalLine[Number(match[1]) - 1] = line + i;
+		}
+	}
+
 	function handleEval(code: string, line: number) {
+		recordEval(code, line);
 		void session.eval(code, line);
 	}
 
@@ -244,6 +256,7 @@ d1 $ s "bd sn:1 ~ hh"
 	}
 
 	function handleRunAll(code: string) {
+		lastEvalLine = {};
 		void session.runFile(code);
 	}
 

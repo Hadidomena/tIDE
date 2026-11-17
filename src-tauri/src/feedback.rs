@@ -59,6 +59,7 @@ pub struct Hit {
     pub cycle: f64,
     pub latency: f32,
     pub sample: String,
+    pub sustain: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -68,6 +69,7 @@ pub struct OrbitHit {
     pub sample: String,
     pub hits: u32,
     pub cycle: f64,
+    pub sustain: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -83,6 +85,7 @@ pub struct PlaybackSnapshot {
 struct OrbitState {
     sample: String,
     cycle: f64,
+    sustain: f32,
 }
 
 #[derive(Clone)]
@@ -127,6 +130,7 @@ impl PlaybackState {
         self.orbits[orbit] = Some(OrbitState {
             sample: hit.sample.clone(),
             cycle: hit.cycle,
+            sustain: hit.sustain,
         });
         self.pending[orbit] += 1;
         self.seen_hit = true;
@@ -172,6 +176,7 @@ impl PlaybackState {
                     sample: state.sample.clone(),
                     hits: *count,
                     cycle: state.cycle,
+                    sustain: state.sustain,
                 });
             }
             *count = 0;
@@ -301,11 +306,18 @@ pub fn parse_packet(packet: &[u8]) -> Option<Hit> {
     }
     let latency = message.args.get(2)?.as_f32()?;
     let sample = message.args.get(3)?.as_str()?.to_string();
+    let sustain = message
+        .args
+        .get(4)
+        .and_then(|arg| arg.as_f32())
+        .filter(|s| s.is_finite() && *s >= 0.0)
+        .unwrap_or(0.0);
     Some(Hit {
         orbit: orbit as u8,
         cycle,
         latency,
         sample,
+        sustain,
     })
 }
 
@@ -420,6 +432,7 @@ mod tests {
             cycle,
             latency: 0.2,
             sample: sample.to_string(),
+            sustain: 0.25,
         }
     }
 
@@ -451,13 +464,14 @@ mod tests {
                 OscArg::Str("42.25".to_string()),
                 OscArg::Float(0.2),
                 OscArg::Str("bd".to_string()),
-                OscArg::Float(60.0),
+                OscArg::Float(0.25),
             ],
         );
         let hit = parse_packet(&raw).expect("hit");
         assert_eq!(hit.orbit, 0);
         assert_eq!(hit.cycle, 42.25);
         assert_eq!(hit.sample, "bd");
+        assert_eq!(hit.sustain, 0.25);
     }
 
     #[test]
@@ -500,7 +514,6 @@ mod tests {
     #[test]
     fn cps_converges_from_cycle_deltas() {
         let mut state = PlaybackState::new();
-        // 1 cycle every 2 s → 0.5 cps.
         for i in 0..12 {
             state.ingest(&hit(0, i as f64, "bd"), i as f64 * 2.0);
         }
@@ -533,6 +546,7 @@ mod tests {
         assert_eq!(snapshot.orbits[0].orbit, 1);
         assert_eq!(snapshot.orbits[0].hits, 2);
         assert_eq!(snapshot.orbits[0].sample, "sn");
+        assert_eq!(snapshot.orbits[0].sustain, 0.25);
 
         let next = state.snapshot(1.4).expect("still live");
         assert!(next.orbits.is_empty(), "pending hits must be drained");

@@ -22,6 +22,7 @@
 		from: number;
 		to: number;
 		seq: number;
+		durationMs?: number;
 	}
 
 	interface Props {
@@ -133,8 +134,13 @@
 	});
 
 	const setFlash = StateEffect.define<FlashRange[] | null>();
-	const flashMark = (seq: number) =>
-		Decoration.mark({ class: seq % 2 ? 'cm-flash cm-flash-alt' : 'cm-flash' });
+	const flashMark = (seq: number, durationMs?: number) => {
+		const attributes = durationMs ? { style: `animation-duration: ${durationMs}ms` } : undefined;
+		return Decoration.mark({
+			class: seq % 2 ? 'cm-flash cm-flash-alt' : 'cm-flash',
+			attributes
+		});
+	};
 
 	const flashField = StateField.define<DecorationSet>({
 		create: () => Decoration.none,
@@ -153,7 +159,7 @@
 					.filter((range) => range.to > range.from);
 				if (ranges.length === 0) return Decoration.none;
 				next = Decoration.set(
-					ranges.map((range) => flashMark(range.seq).range(range.from, range.to)),
+					ranges.map((range) => flashMark(range.seq, range.durationMs).range(range.from, range.to)),
 					true
 				);
 			}
