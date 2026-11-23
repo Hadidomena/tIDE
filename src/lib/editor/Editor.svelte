@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { EditorState, Prec, StateEffect, StateField } from '@codemirror/state';
-	import { Decoration, type DecorationSet, EditorView, keymap } from '@codemirror/view';
+	import { Decoration, type DecorationSet, EditorView, keymap, WidgetType } from '@codemirror/view';
 	import { HighlightStyle, LanguageSupport, syntaxHighlighting } from '@codemirror/language';
 	import { tags } from '@lezer/highlight';
 	import {
@@ -14,6 +14,7 @@
 	import { indentLess, indentMore } from '@codemirror/commands';
 	import { basicSetup } from 'codemirror';
 	import { untrack } from 'svelte';
+	import type { SessionDiagnostic } from '$lib/session.svelte';
 	import { sampleCompletion, type SampleCompletion } from './samples';
 	import { tidalCompletion } from './vocabulary';
 	import { tidalLanguage } from './tidal-mode';
@@ -25,9 +26,127 @@
 		durationMs?: number;
 	}
 
+	interface DiagnosticWidgetEntry {
+		key: string;
+		diagnostic: SessionDiagnostic;
+		expanded: boolean;
+	}
+
+	class DiagnosticWidget extends WidgetType {
+		private readonly signature: string;
+		private readonly entries: DiagnosticWidgetEntry[];
+		private readonly onToggle: (key: string) => void;
+
+		constructor(entries: DiagnosticWidgetEntry[], onToggle: (key: string) => void) {
+			super();
+			this.entries = entries;
+			this.onToggle = onToggle;
+			this.signature = entries
+				.map(
+					({ key, diagnostic, expanded }) =>
+						`${key}\u0000${diagnostic.summary}\u0000${diagnostic.details.join('\n')}\u0000${expanded}`
+				)
+				.join('\u0001');
+		}
+
+		eq(other: WidgetType): boolean {
+			return other instanceof DiagnosticWidget && this.signature === other.signature;
+		}
+
+		toDOM(): HTMLElement {
+			const root = document.createElement('div');
+			root.className = 'cm-diagnostic-widget';
+			root.contentEditable = 'false';
+			root.setAttribute('role', 'group');
+			root.setAttribute('aria-label', 'errors for this line');
+
+			for (const entry of this.entries) {
+				const row = document.createElement('div');
+				row.className = 'cm-diagnostic-entry';
+
+				const header = document.createElement('div');
+				header.className = 'cm-diagnostic-header';
+				const summary = document.createElement('span');
+				summary.className = 'cm-diagnostic-summary';
+				summary.textContent = entry.diagnostic.summary;
+				header.append(summary);
+
+				if (entry.diagnostic.details.length > 0) {
+					const button = document.createElement('button');
+					button.type = 'button';
+					button.className = 'cm-diagnostic-toggle';
+					button.setAttribute('aria-expanded', String(entry.expanded));
+					button.textContent = entry.expanded ? 'hide details' : 'show details';
+					button.addEventListener('click', (event) => {
+						event.preventDefault();
+						event.stopPropagation();
+						this.onToggle(entry.key);
+					});
+					header.append(button);
+				}
+				row.append(header);
+
+				if (entry.expanded && entry.diagnostic.details.length > 0) {
+					const details = document.createElement('pre');
+					details.className = 'cm-diagnostic-details';
+					details.textContent = entry.diagnostic.details.join('\n');
+					row.append(details);
+				}
+
+				root.append(row);
+			}
+
+			return root;
+		}
+
+		ignoreEvent(): boolean {
+			return true;
+		}
+	}
+
+	function buildDiagnosticDecorations(
+		state: EditorState,
+		diagnostics: SessionDiagnostic[],
+		expandedKeys: string[],
+		onToggle: (key: string) => void
+	): DecorationSet {
+		const grouped: { lineNumber: number; entries: DiagnosticWidgetEntry[] }[] = [];
+		for (const diagnostic of diagnostics) {
+			if (diagnostic.line < 1 || diagnostic.line > state.doc.lines) continue;
+			let group = grouped.find((item) => item.lineNumber === diagnostic.line);
+			if (!group) {
+				group = { lineNumber: diagnostic.line, entries: [] };
+				grouped.push(group);
+			}
+			const entries = group.entries;
+			const key = [
+				diagnostic.requestId,
+				diagnostic.statementIndex ?? 'single',
+				diagnostic.line,
+				diagnostic.column ?? '',
+				entries.length
+			].join(':');
+			entries.push({ key, diagnostic, expanded: expandedKeys.includes(key) });
+		}
+
+		const decorations = [];
+		for (const { lineNumber, entries } of grouped) {
+			const line = state.doc.line(lineNumber);
+			decorations.push(Decoration.line({ class: 'cm-error-line' }).range(line.from));
+			decorations.push(
+				Decoration.widget({
+					widget: new DiagnosticWidget(entries, onToggle),
+					block: true,
+					side: 1
+				}).range(line.to)
+			);
+		}
+		return Decoration.set(decorations, true);
+	}
+
 	interface Props {
 		content?: string;
-		errorLine?: number | null;
+		diagnostics?: SessionDiagnostic[];
 		flashRanges?: FlashRange[];
 		onEval?: (code: string, line: number) => void;
 		onRunAll?: (code: string) => void;
@@ -38,7 +157,7 @@
 
 	let {
 		content = $bindable(''),
-		errorLine = null,
+		diagnostics = [],
 		flashRanges = [],
 		onEval = () => {},
 		onRunAll = () => {},
@@ -49,6 +168,8 @@
 
 	let host: HTMLDivElement | undefined = $state();
 	let view: EditorView | undefined;
+	let expandedDiagnosticKeys = $state<string[]>([]);
+	let expandedDiagnosticRequestId: string | null = null;
 
 	const samples = sampleCompletion((name) => onPreviewSample(name));
 
@@ -117,18 +238,23 @@
 		return true;
 	}
 
-	const setErrorLine = StateEffect.define<number | null>();
+	const setDiagnostics = StateEffect.define<{
+		diagnostics: SessionDiagnostic[];
+		expandedKeys: string[];
+	}>();
 
-	const errorLineField = StateField.define<DecorationSet>({
+	const diagnosticField = StateField.define<DecorationSet>({
 		create: () => Decoration.none,
 		update(decorations, tr) {
-			let next = decorations.map(tr.changes);
+			let next = tr.docChanged ? Decoration.none : decorations.map(tr.changes);
 			for (const effect of tr.effects) {
-				if (!effect.is(setErrorLine)) continue;
-				if (effect.value == null) return Decoration.none;
-				const number = Math.min(Math.max(effect.value, 1), tr.state.doc.lines);
-				const line = tr.state.doc.line(number);
-				next = Decoration.set([Decoration.line({ class: 'cm-error-line' }).range(line.from)]);
+				if (!effect.is(setDiagnostics)) continue;
+				next = buildDiagnosticDecorations(
+					tr.state,
+					effect.value.diagnostics,
+					effect.value.expandedKeys,
+					toggleDiagnostic
+				);
 			}
 			return next;
 		},
@@ -182,7 +308,7 @@
 					synthwaveTheme,
 					syntaxHighlighting(synthwaveHighlight),
 					EditorView.lineWrapping,
-					errorLineField,
+					diagnosticField,
 					flashField,
 					Prec.high(
 						keymap.of([
@@ -241,9 +367,25 @@
 		};
 	});
 
+	function toggleDiagnostic(key: string) {
+		expandedDiagnosticKeys = expandedDiagnosticKeys.includes(key)
+			? expandedDiagnosticKeys.filter((current) => current !== key)
+			: [...expandedDiagnosticKeys, key];
+	}
+
+	$effect(() => {
+		const requestId = diagnostics[0]?.requestId ?? null;
+		if (requestId !== expandedDiagnosticRequestId) {
+			expandedDiagnosticRequestId = requestId;
+			expandedDiagnosticKeys = [];
+		}
+	});
+
 	$effect(() => {
 		if (!view) return;
-		view.dispatch({ effects: setErrorLine.of(errorLine ?? null) });
+		view.dispatch({
+			effects: setDiagnostics.of({ diagnostics, expandedKeys: expandedDiagnosticKeys })
+		});
 	});
 
 	$effect(() => {
@@ -307,6 +449,70 @@
 
 	:global(.editor-host .cm-error-line) {
 		background: color-mix(in srgb, var(--sw-red) 15%, transparent);
+	}
+
+	:global(.editor-host .cm-diagnostic-widget) {
+		display: block;
+		box-sizing: border-box;
+		width: 100%;
+		margin: 0.12rem 0 0.3rem;
+		padding: 0.3rem 0.6rem;
+		border-left: 2px solid var(--sw-red);
+		background: color-mix(in srgb, var(--sw-red) 8%, var(--sw-bg));
+		color: var(--sw-text);
+		font-size: 0.78rem;
+		line-height: 1.45;
+		white-space: normal;
+	}
+
+	:global(.editor-host .cm-diagnostic-entry + .cm-diagnostic-entry) {
+		margin-top: 0.35rem;
+		padding-top: 0.35rem;
+		border-top: 1px solid color-mix(in srgb, var(--sw-red) 25%, transparent);
+	}
+
+	:global(.editor-host .cm-diagnostic-header) {
+		display: flex;
+		align-items: flex-start;
+		justify-content: space-between;
+		gap: 0.75rem;
+	}
+
+	:global(.editor-host .cm-diagnostic-summary) {
+		min-width: 0;
+		overflow-wrap: anywhere;
+	}
+
+	:global(.editor-host .cm-diagnostic-toggle) {
+		flex: 0 0 auto;
+		padding: 0;
+		border: 0;
+		background: transparent;
+		color: var(--sw-muted);
+		font: inherit;
+		font-size: 0.68rem;
+		text-decoration: underline;
+		text-underline-offset: 0.15em;
+		cursor: pointer;
+	}
+
+	:global(.editor-host .cm-diagnostic-toggle:hover),
+	:global(.editor-host .cm-diagnostic-toggle:focus-visible) {
+		color: var(--sw-text);
+	}
+
+	:global(.editor-host .cm-diagnostic-toggle:focus-visible) {
+		outline: 1px solid var(--sw-red);
+		outline-offset: 2px;
+	}
+
+	:global(.editor-host .cm-diagnostic-details) {
+		max-width: 100%;
+		margin: 0.3rem 0 0;
+		color: var(--sw-muted);
+		font: inherit;
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
 	}
 
 	:global(.cm-tooltip.cm-tooltip-autocomplete) {

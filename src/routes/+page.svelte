@@ -89,7 +89,6 @@
 d1 $ s "bd sn:1 ~ hh"
 `);
 
-	const errorLine = $derived(session.diagnostics.at(-1)?.line ?? null);
 	let consoleEl: HTMLPreElement | undefined = $state();
 	let editor: EditorApi | undefined = $state();
 	let flashes = $state<{ from: number; to: number; seq: number; durationMs: number }[]>([]);
@@ -418,7 +417,7 @@ d1 $ s "bd sn:1 ~ hh"
 		<Editor
 			bind:this={editor}
 			bind:content={buffer}
-			{errorLine}
+			diagnostics={session.diagnostics}
 			flashRanges={flashes}
 			onEval={handleEval}
 			onRunAll={handleRunAll}
