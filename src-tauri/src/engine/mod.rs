@@ -191,6 +191,9 @@ fn emit_output(evt: &Sender<SessionEvent>, text: String) {
     let _ = evt.send(SessionEvent::Output {
         stream: "engine",
         text,
+        request_id: None,
+        document_version: None,
+        statement_index: None,
     });
 }
 

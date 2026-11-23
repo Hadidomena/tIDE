@@ -99,6 +99,7 @@ d1 $ s "bd sn:1 ~ hh"
 	let lineIn = $state('');
 	let showLogs = $state(false);
 	let lastSaved = $state('');
+	let documentVersion = 0;
 	const dirty = $derived(buffer !== lastSaved);
 
 	onMount(() => {
@@ -248,7 +249,12 @@ d1 $ s "bd sn:1 ~ hh"
 
 	function handleEval(code: string, line: number) {
 		recordEval(code, line);
-		void session.eval(code, line);
+		void session.eval(code, line, documentVersion);
+	}
+
+	function handleDocumentChange() {
+		documentVersion += 1;
+		session.documentChanged(documentVersion);
 	}
 
 	function handleHush() {
@@ -257,7 +263,7 @@ d1 $ s "bd sn:1 ~ hh"
 
 	function handleRunAll(code: string) {
 		lastEvalLine = {};
-		void session.runFile(code);
+		void session.runFile(code, documentVersion);
 	}
 
 	function handlePreviewSample(name: string) {
@@ -415,6 +421,7 @@ d1 $ s "bd sn:1 ~ hh"
 			flashRanges={flashes}
 			onEval={handleEval}
 			onRunAll={handleRunAll}
+			onDocumentChange={handleDocumentChange}
 			onHush={handleHush}
 			onPreviewSample={handlePreviewSample}
 		/>

@@ -47,6 +47,12 @@ pub enum SessionEvent {
     Output {
         stream: &'static str,
         text: String,
+        #[serde(rename = "requestId")]
+        request_id: Option<String>,
+        #[serde(rename = "documentVersion")]
+        document_version: Option<u64>,
+        #[serde(rename = "statementIndex")]
+        statement_index: Option<usize>,
     },
     Engine {
         engine: Engine,
@@ -93,8 +99,22 @@ enum Cmd {
     Start(Engine, PathBuf, AudioDevices, u16),
     Restart(Option<Engine>, PathBuf, AudioDevices, u16),
     Stop,
-    Eval(String, Option<usize>),
-    Death { id: u32, reason: String },
+    Eval {
+        code: String,
+        line: Option<usize>,
+        context: Option<EvalContext>,
+    },
+    Death {
+        id: u32,
+        reason: String,
+    },
+}
+
+#[derive(Clone, Debug)]
+struct EvalContext {
+    request_id: String,
+    document_version: Option<u64>,
+    statement_index: Option<usize>,
 }
 
 type SharedState = Arc<Mutex<SessionState>>;
@@ -202,12 +222,49 @@ impl Session {
     }
 
     pub fn eval(&self, code: String, line: Option<usize>) -> Result<(), String> {
-        self.send(Cmd::Eval(code, line))
+        self.send(Cmd::Eval {
+            code,
+            line,
+            context: None,
+        })
+    }
+
+    fn eval_with_context(
+        &self,
+        code: String,
+        line: Option<usize>,
+        context: EvalContext,
+    ) -> Result<(), String> {
+        self.send(Cmd::Eval {
+            code,
+            line,
+            context: Some(context),
+        })
     }
 
     pub fn eval_many(&self, statements: Vec<Statement>) -> Result<usize, String> {
         for statement in &statements {
-            self.send(Cmd::Eval(statement.text.clone(), Some(statement.line)))?;
+            self.eval(statement.text.clone(), Some(statement.line))?;
+        }
+        Ok(statements.len())
+    }
+
+    fn eval_many_with_context(
+        &self,
+        statements: Vec<Statement>,
+        request_id: String,
+        document_version: Option<u64>,
+    ) -> Result<usize, String> {
+        for (statement_index, statement) in statements.iter().enumerate() {
+            self.eval_with_context(
+                statement.text.clone(),
+                Some(statement.line),
+                EvalContext {
+                    request_id: request_id.clone(),
+                    document_version,
+                    statement_index: Some(statement_index),
+                },
+            )?;
         }
         Ok(statements.len())
     }
@@ -297,6 +354,8 @@ fn clean_device(name: Option<String>) -> Option<String> {
 pub fn session_eval(
     code: String,
     line: Option<usize>,
+    request_id: String,
+    document_version: Option<u64>,
     session: State<'_, Session>,
 ) -> Result<SessionState, String> {
     let code = code.trim().to_string();
@@ -306,12 +365,28 @@ pub fn session_eval(
     if session.state() != SessionState::Ready {
         return Err(format!("session not ready (state: {:?})", session.state()));
     }
-    session.eval(code, line)?;
+    if request_id.trim().is_empty() {
+        return Err("missing eval request id".to_string());
+    }
+    session.eval_with_context(
+        code,
+        line,
+        EvalContext {
+            request_id,
+            document_version,
+            statement_index: None,
+        },
+    )?;
     Ok(session.state())
 }
 
 #[tauri::command]
-pub fn session_eval_file(code: String, session: State<'_, Session>) -> Result<usize, String> {
+pub fn session_eval_file(
+    code: String,
+    request_id: String,
+    document_version: Option<u64>,
+    session: State<'_, Session>,
+) -> Result<usize, String> {
     if session.state() != SessionState::Ready {
         return Err(format!("session not ready (state: {:?})", session.state()));
     }
@@ -319,7 +394,10 @@ pub fn session_eval_file(code: String, session: State<'_, Session>) -> Result<us
     if statements.is_empty() {
         return Err("nothing to evaluate".to_string());
     }
-    session.eval_many(statements)
+    if request_id.trim().is_empty() {
+        return Err("missing eval request id".to_string());
+    }
+    session.eval_many_with_context(statements, request_id, document_version)
 }
 
 #[tauri::command]
@@ -363,8 +441,14 @@ fn set_state(shared: &SharedState, evt: &Events, next: SessionState) {
     let _ = evt.send(SessionEvent::State { state: next });
 }
 
-fn emit_output(evt: &Events, stream: &'static str, text: String) {
-    let _ = evt.send(SessionEvent::Output { stream, text });
+fn emit_output(evt: &Events, stream: &'static str, text: String, context: Option<&EvalContext>) {
+    let _ = evt.send(SessionEvent::Output {
+        stream,
+        text,
+        request_id: context.map(|context| context.request_id.clone()),
+        document_version: context.and_then(|context| context.document_version),
+        statement_index: context.and_then(|context| context.statement_index),
+    });
 }
 
 fn spawn_reader<R: Read + Send + 'static>(
@@ -407,17 +491,18 @@ fn pump(
     acc: &mut String,
     timeout: Duration,
     min_prompts: usize,
+    context: Option<&EvalContext>,
 ) -> PumpOutcome {
     let deadline = Instant::now() + timeout;
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         match a.lines.recv_timeout(remaining) {
             Ok(Line::Stdout(t)) => {
-                emit_output(evt, "stdout", t.clone());
+                emit_output(evt, "stdout", t.clone(), context);
                 acc.push_str(&t);
             }
             Ok(Line::Stderr(t)) => {
-                emit_output(evt, "stderr", t.clone());
+                emit_output(evt, "stderr", t.clone(), context);
                 acc.push_str(&t);
             }
             Err(RecvTimeoutError::Timeout) => return PumpOutcome::Timeout,
@@ -588,6 +673,7 @@ fn do_start(
         &mut acc,
         STARTUP_TIMEOUT,
         PROMPT_SETUP.matches('\n').count(),
+        None,
     ) {
         PumpOutcome::Done => {}
         PumpOutcome::Timeout => {
@@ -604,7 +690,14 @@ fn do_start(
 
     write_all(&mut a.stdin, PRELUDE)?;
     let mut acc = String::new();
-    match pump(&mut a, evt, &mut acc, STARTUP_TIMEOUT, prelude_prompts()) {
+    match pump(
+        &mut a,
+        evt,
+        &mut acc,
+        STARTUP_TIMEOUT,
+        prelude_prompts(),
+        None,
+    ) {
         PumpOutcome::Done => Ok(a),
         PumpOutcome::Timeout => {
             let _ = a.child.lock().unwrap().kill();
@@ -652,7 +745,7 @@ fn begin_session(
             set_state(state, evt, SessionState::Ready);
         }
         Err(reason) => {
-            emit_output(evt, "stderr", reason);
+            emit_output(evt, "stderr", reason, None);
             engine.stop(); // never leave a half-booted synth behind a failed session
             set_state(state, evt, SessionState::Failed);
         }
@@ -723,19 +816,29 @@ fn worker_loop(
                             &evt,
                             "stderr",
                             "nothing to restart — start the session first".to_string(),
+                            None,
                         );
                         set_state(&state, &evt, SessionState::Stopped);
                     }
                 }
             }
 
-            Cmd::Eval(code, line) => {
+            Cmd::Eval {
+                code,
+                line,
+                context,
+            } => {
                 let frame = wrap_code(&code, line);
                 if frame.is_empty() {
                     continue;
                 }
                 if active.is_none() {
-                    emit_output(&evt, "stderr", "no session — start it first".to_string());
+                    emit_output(
+                        &evt,
+                        "stderr",
+                        "no session — start it first".to_string(),
+                        context.as_ref(),
+                    );
                     continue;
                 }
                 set_state(&state, &evt, SessionState::Busy);
@@ -745,7 +848,7 @@ fn worker_loop(
                         Err(e)
                     } else {
                         let mut acc = String::new();
-                        match pump(a, &evt, &mut acc, EVAL_TIMEOUT, 1) {
+                        match pump(a, &evt, &mut acc, EVAL_TIMEOUT, 1, context.as_ref()) {
                             PumpOutcome::Done => Ok(()),
                             PumpOutcome::Timeout => {
                                 Err("eval timed out waiting for prompt — restart the session"
@@ -758,7 +861,7 @@ fn worker_loop(
                 match outcome {
                     Ok(()) => set_state(&state, &evt, SessionState::Ready),
                     Err(msg) => {
-                        emit_output(&evt, "stderr", msg);
+                        emit_output(&evt, "stderr", msg, context.as_ref());
                         kill(&mut active);
                         set_state(&state, &evt, SessionState::Failed);
                     }
@@ -768,7 +871,7 @@ fn worker_loop(
             Cmd::Death { id, reason } => {
                 let live = state.lock().unwrap().is_live();
                 if live && active.as_ref().is_some_and(|a| a.id == id) {
-                    emit_output(&evt, "stderr", format!("ghci exited: {reason}"));
+                    emit_output(&evt, "stderr", format!("ghci exited: {reason}"), None);
                     kill(&mut active);
                     engine.stop();
                     set_state(&state, &evt, SessionState::Failed);
@@ -789,6 +892,29 @@ fn worker_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn eval_output_event_serializes_correlation_metadata() {
+        let (events, received) = mpsc::channel();
+        let context = EvalContext {
+            request_id: "eval-12".to_string(),
+            document_version: Some(8),
+            statement_index: Some(2),
+        };
+
+        emit_output(
+            &events,
+            "stdout",
+            "diagnostic chunk".to_string(),
+            Some(&context),
+        );
+
+        let serialized = serde_json::to_value(received.recv().unwrap()).unwrap();
+        assert_eq!(serialized["kind"], "output");
+        assert_eq!(serialized["requestId"], "eval-12");
+        assert_eq!(serialized["documentVersion"], 8);
+        assert_eq!(serialized["statementIndex"], 2);
+    }
 
     fn wait_for_state(sess: &Session, want: SessionState, secs: u64) -> bool {
         let deadline = Instant::now() + Duration::from_secs(secs);

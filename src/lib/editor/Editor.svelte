@@ -33,6 +33,7 @@
 		onRunAll?: (code: string) => void;
 		onHush?: () => void;
 		onPreviewSample?: (name: string) => void;
+		onDocumentChange?: () => void;
 	}
 
 	let {
@@ -42,7 +43,8 @@
 		onEval = () => {},
 		onRunAll = () => {},
 		onHush = () => {},
-		onPreviewSample = () => {}
+		onPreviewSample = () => {},
+		onDocumentChange = () => {}
 	}: Props = $props();
 
 	let host: HTMLDivElement | undefined = $state();
@@ -225,7 +227,10 @@
 						])
 					),
 					EditorView.updateListener.of((u) => {
-						if (u.docChanged) content = u.state.doc.toString();
+						if (u.docChanged) {
+							content = u.state.doc.toString();
+							onDocumentChange();
+						}
 					})
 				]
 			})

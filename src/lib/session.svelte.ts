@@ -33,7 +33,14 @@ export interface Playback {
 
 type WireEvent =
 	| { kind: 'state'; state: SessionState }
-	| { kind: 'output'; stream: 'stdout' | 'stderr' | 'engine'; text: string }
+	| {
+			kind: 'output';
+			stream: 'stdout' | 'stderr' | 'engine';
+			text: string;
+			requestId?: string | null;
+			documentVersion?: number | null;
+			statementIndex?: number | null;
+	  }
 	| ({ kind: 'engine' } & EngineStatus)
 	| ({ kind: 'playback' } & Playback);
 
@@ -48,7 +55,11 @@ class SessionModel {
 	private connected = false;
 	private unlisten: UnlistenFn | undefined;
 	private seq = 0;
-	private outputTail = '';
+	private requestSeq = 0;
+	private activeRequestId: string | undefined;
+	private activeDocumentVersion: number | undefined;
+	private documentVersion = 0;
+	private outputTails = new Map<string, string>();
 
 	async connect(
 		engine: string | null = null,
@@ -87,7 +98,14 @@ class SessionModel {
 			return;
 		}
 		this.push(ev.stream, ev.text);
-		this.detectErrorLine(ev.text);
+		if (ev.requestId) {
+			this.detectErrorLine(
+				ev.text,
+				ev.requestId,
+				ev.documentVersion ?? undefined,
+				ev.statementIndex ?? undefined
+			);
+		}
 		if (
 			ev.stream === 'stderr' &&
 			/failed to spawn ghci|cannot satisfy -package tidal/.test(ev.text)
@@ -99,11 +117,41 @@ class SessionModel {
 		}
 	}
 
-	private detectErrorLine(text: string) {
-		const combined = this.outputTail + text;
-		this.outputTail = combined.slice(-256);
+	private detectErrorLine(
+		text: string,
+		requestId: string,
+		documentVersion: number | undefined,
+		statementIndex: number | undefined
+	) {
+		if (
+			requestId !== this.activeRequestId ||
+			documentVersion !== this.activeDocumentVersion ||
+			(documentVersion !== undefined && documentVersion !== this.documentVersion)
+		) {
+			return;
+		}
+		const key = `${requestId}:${statementIndex ?? 0}`;
+		const combined = (this.outputTails.get(key) ?? '') + text;
+		this.outputTails.set(key, combined.slice(-256));
 		const match = /tIDE\.hs:(\d+):\d+/.exec(combined);
 		if (match) this.errorLine = Number(match[1]);
+	}
+
+	private beginEvalRequest(documentVersion?: number): string {
+		const requestId = `eval-${++this.requestSeq}`;
+		this.activeRequestId = requestId;
+		this.activeDocumentVersion = documentVersion;
+		this.outputTails.clear();
+		this.errorLine = null;
+		return requestId;
+	}
+
+	documentChanged(version: number) {
+		this.documentVersion = version;
+		this.activeRequestId = undefined;
+		this.activeDocumentVersion = undefined;
+		this.outputTails.clear();
+		this.errorLine = null;
 	}
 
 	private push(stream: Chunk['stream'], text: string) {
@@ -130,19 +178,28 @@ class SessionModel {
 		await this.eval('hush');
 	}
 
-	async eval(code: string, line?: number) {
-		this.errorLine = null;
+	async eval(code: string, line?: number, documentVersion?: number) {
+		const requestId = this.beginEvalRequest(documentVersion);
 		try {
-			await invoke('session_eval', { code, line: line ?? null });
+			await invoke('session_eval', {
+				code,
+				line: line ?? null,
+				requestId,
+				documentVersion: documentVersion ?? null
+			});
 		} catch (e) {
 			this.push('system', `eval rejected: ${String(e)}\n`);
 		}
 	}
 
-	async runFile(code: string) {
-		this.errorLine = null;
+	async runFile(code: string, documentVersion?: number) {
+		const requestId = this.beginEvalRequest(documentVersion);
 		try {
-			const count = await invoke<number>('session_eval_file', { code });
+			const count = await invoke<number>('session_eval_file', {
+				code,
+				requestId,
+				documentVersion: documentVersion ?? null
+			});
 			this.notify(`running ${count} statement${count === 1 ? '' : 's'} from the file`);
 		} catch (e) {
 			this.push('system', `run file failed: ${String(e)}\n`);
