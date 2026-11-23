@@ -1049,6 +1049,62 @@ mod tests {
         }
     }
 
+    fn run_eval_with_context(
+        sess: &Session,
+        rx: &mut Receiver<SessionEvent>,
+        code: &str,
+        line: usize,
+        context: EvalContext,
+    ) -> Result<(String, Vec<SessionEvent>), String> {
+        sess.eval_with_context(code.to_string(), Some(line), context)?;
+
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            let event = rx
+                .recv_timeout(
+                    deadline
+                        .saturating_duration_since(Instant::now())
+                        .max(Duration::from_millis(50)),
+                )
+                .map_err(|_| "no Busy transition seen".to_string())?;
+            if matches!(
+                event,
+                SessionEvent::State {
+                    state: SessionState::Busy
+                }
+            ) {
+                break;
+            }
+        }
+
+        let mut output = String::new();
+        let mut diagnostics = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let event = rx
+                .recv_timeout(
+                    deadline
+                        .saturating_duration_since(Instant::now())
+                        .max(Duration::from_millis(50)),
+                )
+                .map_err(|_| "eval never completed".to_string())?;
+            match event {
+                SessionEvent::Output { text, .. } => output.push_str(&text),
+                event @ SessionEvent::Diagnostic { .. } => diagnostics.push(event),
+                SessionEvent::State {
+                    state: SessionState::Ready,
+                } => return Ok((output, diagnostics)),
+                SessionEvent::State {
+                    state: SessionState::Failed,
+                } => return Err(format!("session failed, output so far: {output}")),
+                SessionEvent::State { state } => {
+                    return Err(format!("unexpected state {state:?}"));
+                }
+                SessionEvent::Engine { .. } | SessionEvent::Playback { .. } => {}
+            }
+        }
+    }
+
     fn drain_events(rx: &mut Receiver<SessionEvent>) -> String {
         let mut log = String::new();
         while let Ok(ev) = rx.recv_timeout(Duration::from_millis(100)) {
@@ -1165,6 +1221,53 @@ mod tests {
             out.contains("42"),
             "queued file statements did not run in order: {out}"
         );
+
+        let statements = split_statements(
+            "let tide_before_error = 1\nundefinedThing 1\nlet tide_after_error = 2\n",
+        );
+        assert_eq!(
+            sess.eval_many_with_context(
+                statements,
+                "headless-run-file-diagnostic".to_string(),
+                Some(4)
+            )
+            .unwrap(),
+            3
+        );
+        let mut busy = 0;
+        let mut diagnostics = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let event = rx
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .expect("run-file evals should complete");
+            match event {
+                SessionEvent::State {
+                    state: SessionState::Busy,
+                } => busy += 1,
+                SessionEvent::State {
+                    state: SessionState::Ready,
+                } if busy >= 3 => break,
+                event @ SessionEvent::Diagnostic { .. } => diagnostics.push(event),
+                SessionEvent::State {
+                    state: SessionState::Failed,
+                } => panic!("session failed during run file"),
+                _ => {}
+            }
+        }
+        assert_eq!(busy, 3, "all run-file statements should execute");
+        assert_eq!(diagnostics.len(), 1, "diagnostics: {diagnostics:?}");
+        assert!(matches!(
+            diagnostics.pop(),
+            Some(SessionEvent::Diagnostic {
+                request_id,
+                document_version: Some(4),
+                statement_index: Some(1),
+                line: 2,
+                ..
+            }) if request_id == "headless-run-file-diagnostic"
+        ));
+
         sess.stop();
     }
 
@@ -1204,54 +1307,59 @@ mod tests {
             );
         }
 
-        let request_id = "headless-diagnostic-test".to_string();
-        sess.eval_with_context(
-            "undefinedThing 1".to_string(),
-            Some(7),
+        let (out, diagnostics) = run_eval_with_context(
+            &sess,
+            &mut rx,
+            "1 + 1",
+            6,
             EvalContext {
-                request_id: request_id.clone(),
+                request_id: "headless-valid-test".to_string(),
                 document_version: Some(12),
                 statement_index: Some(0),
             },
         )
         .unwrap();
-        let mut out = String::new();
-        let mut diagnostic = None;
-        let deadline = Instant::now() + Duration::from_secs(30);
-        loop {
-            let event = rx
-                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-                .expect("eval should produce output and complete");
-            match event {
-                SessionEvent::Output { text, .. } => out.push_str(&text),
-                event @ SessionEvent::Diagnostic { .. } => diagnostic = Some(event),
-                SessionEvent::State {
-                    state: SessionState::Ready,
-                } => break,
-                SessionEvent::State { state } => {
-                    assert_ne!(state, SessionState::Failed, "session failed: {out}");
-                }
-                SessionEvent::Engine { .. } | SessionEvent::Playback { .. } => {}
-            }
-        }
+        assert!(out.contains('2'), "expected valid eval output, got: {out}");
         assert!(
-            out.contains("tIDE.hs:7:"),
+            diagnostics.is_empty(),
+            "valid eval must not emit diagnostics: {diagnostics:?}"
+        );
+
+        let request_id = "headless-diagnostic-test".to_string();
+        let (out, diagnostics) = run_eval_with_context(
+            &sess,
+            &mut rx,
+            "let x = (1 :: Int) + 2.0",
+            7,
+            EvalContext {
+                request_id: request_id.clone(),
+                document_version: Some(13),
+                statement_index: Some(1),
+            },
+        )
+        .unwrap();
+        assert!(
+            out.contains("tIDE.hs:7:22:"),
             "error must point at the editor line 7, got: {out}"
         );
-        match diagnostic.expect("localized GHC error should produce a diagnostic event") {
+        assert_eq!(diagnostics.len(), 1, "diagnostics: {diagnostics:?}");
+        match diagnostics.into_iter().next().unwrap() {
             SessionEvent::Diagnostic {
                 request_id: actual_request,
                 document_version,
                 statement_index,
                 line,
+                column,
                 summary,
-                ..
+                details,
             } => {
                 assert_eq!(actual_request, request_id);
-                assert_eq!(document_version, Some(12));
-                assert_eq!(statement_index, Some(0));
+                assert_eq!(document_version, Some(13));
+                assert_eq!(statement_index, Some(1));
                 assert_eq!(line, 7);
-                assert!(summary.contains("undefinedThing"), "summary: {summary}");
+                assert_eq!(column, Some(22));
+                assert!(summary.contains("Fractional Int"), "summary: {summary}");
+                assert!(!details.is_empty(), "details must include GHC context");
             }
             _ => unreachable!(),
         }
