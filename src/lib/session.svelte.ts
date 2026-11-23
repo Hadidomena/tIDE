@@ -31,6 +31,16 @@ export interface Playback {
 	orbits: PlaybackOrbit[];
 }
 
+export interface SessionDiagnostic {
+	requestId: string;
+	documentVersion: number | null;
+	statementIndex: number | null;
+	line: number;
+	column: number | null;
+	summary: string;
+	details: string[];
+}
+
 type WireEvent =
 	| { kind: 'state'; state: SessionState }
 	| {
@@ -41,6 +51,7 @@ type WireEvent =
 			documentVersion?: number | null;
 			statementIndex?: number | null;
 	  }
+	| ({ kind: 'diagnostic' } & SessionDiagnostic)
 	| ({ kind: 'engine' } & EngineStatus)
 	| ({ kind: 'playback' } & Playback);
 
@@ -50,7 +61,7 @@ class SessionModel {
 	state = $state<SessionState>('stopped');
 	engine = $state<EngineStatus | null>(null);
 	playback = $state<Playback | null>(null);
-	errorLine = $state<number | null>(null);
+	diagnostics = $state<SessionDiagnostic[]>([]);
 	chunks = $state<Chunk[]>([]);
 	private connected = false;
 	private unlisten: UnlistenFn | undefined;
@@ -59,7 +70,6 @@ class SessionModel {
 	private activeRequestId: string | undefined;
 	private activeDocumentVersion: number | undefined;
 	private documentVersion = 0;
-	private outputTails = new Map<string, string>();
 
 	async connect(
 		engine: string | null = null,
@@ -97,15 +107,13 @@ class SessionModel {
 			};
 			return;
 		}
-		this.push(ev.stream, ev.text);
-		if (ev.requestId) {
-			this.detectErrorLine(
-				ev.text,
-				ev.requestId,
-				ev.documentVersion ?? undefined,
-				ev.statementIndex ?? undefined
-			);
+		if (ev.kind === 'diagnostic') {
+			if (this.isCurrentEval(ev.requestId, ev.documentVersion ?? undefined)) {
+				this.diagnostics.push(ev);
+			}
+			return;
 		}
+		this.push(ev.stream, ev.text);
 		if (
 			ev.stream === 'stderr' &&
 			/failed to spawn ghci|cannot satisfy -package tidal/.test(ev.text)
@@ -117,41 +125,31 @@ class SessionModel {
 		}
 	}
 
-	private detectErrorLine(
-		text: string,
-		requestId: string,
-		documentVersion: number | undefined,
-		statementIndex: number | undefined
-	) {
-		if (
-			requestId !== this.activeRequestId ||
-			documentVersion !== this.activeDocumentVersion ||
-			(documentVersion !== undefined && documentVersion !== this.documentVersion)
-		) {
-			return;
-		}
-		const key = `${requestId}:${statementIndex ?? 0}`;
-		const combined = (this.outputTails.get(key) ?? '') + text;
-		this.outputTails.set(key, combined.slice(-256));
-		const match = /tIDE\.hs:(\d+):\d+/.exec(combined);
-		if (match) this.errorLine = Number(match[1]);
+	private isCurrentEval(requestId: string, documentVersion?: number): boolean {
+		return (
+			requestId === this.activeRequestId &&
+			documentVersion === this.activeDocumentVersion &&
+			(documentVersion === undefined || documentVersion === this.documentVersion)
+		);
 	}
 
 	private beginEvalRequest(documentVersion?: number): string {
 		const requestId = `eval-${++this.requestSeq}`;
 		this.activeRequestId = requestId;
 		this.activeDocumentVersion = documentVersion;
-		this.outputTails.clear();
-		this.errorLine = null;
+		this.diagnostics = [];
 		return requestId;
 	}
 
 	documentChanged(version: number) {
 		this.documentVersion = version;
+		this.clearEvalResults();
+	}
+
+	private clearEvalResults() {
 		this.activeRequestId = undefined;
 		this.activeDocumentVersion = undefined;
-		this.outputTails.clear();
-		this.errorLine = null;
+		this.diagnostics = [];
 	}
 
 	private push(stream: Chunk['stream'], text: string) {
@@ -219,6 +217,7 @@ class SessionModel {
 		audioOut: string | null = null
 	) {
 		try {
+			this.clearEvalResults();
 			this.state = await invoke<SessionState>('session_restart', { engine, audioIn, audioOut });
 		} catch (e) {
 			this.push('system', `restart failed: ${String(e)}\n`);

@@ -3,7 +3,8 @@ pub mod process;
 use crate::engine::{AudioDevices, AudioInputChoice, Engine, EngineLauncher, EngineState};
 use crate::feedback::{Feedback, OrbitHit};
 use process::{
-    PRELUDE, PROMPT_SETUP, Statement, is_ready, prelude_prompts, split_statements, wrap_code,
+    GhcDiagnostic, PRELUDE, PROMPT_SETUP, Statement, is_ready, parse_ghc_diagnostics,
+    prelude_prompts, split_statements, wrap_code,
 };
 use serde::Serialize;
 use std::io::{Read, Write};
@@ -53,6 +54,18 @@ pub enum SessionEvent {
         document_version: Option<u64>,
         #[serde(rename = "statementIndex")]
         statement_index: Option<usize>,
+    },
+    Diagnostic {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(rename = "documentVersion")]
+        document_version: Option<u64>,
+        #[serde(rename = "statementIndex")]
+        statement_index: Option<usize>,
+        line: usize,
+        column: Option<usize>,
+        summary: String,
+        details: Vec<String>,
     },
     Engine {
         engine: Engine,
@@ -451,6 +464,18 @@ fn emit_output(evt: &Events, stream: &'static str, text: String, context: Option
     });
 }
 
+fn emit_diagnostic(evt: &Events, context: &EvalContext, diagnostic: GhcDiagnostic) {
+    let _ = evt.send(SessionEvent::Diagnostic {
+        request_id: context.request_id.clone(),
+        document_version: context.document_version,
+        statement_index: context.statement_index,
+        line: diagnostic.line,
+        column: diagnostic.column,
+        summary: diagnostic.summary,
+        details: diagnostic.details,
+    });
+}
+
 fn spawn_reader<R: Read + Send + 'static>(
     mut read: R,
     tx: mpsc::Sender<Line>,
@@ -842,12 +867,12 @@ fn worker_loop(
                     continue;
                 }
                 set_state(&state, &evt, SessionState::Busy);
+                let mut acc = String::new();
                 let outcome = {
                     let a = active.as_mut().unwrap();
                     if let Err(e) = write_all(&mut a.stdin, &frame) {
                         Err(e)
                     } else {
-                        let mut acc = String::new();
                         match pump(a, &evt, &mut acc, EVAL_TIMEOUT, 1, context.as_ref()) {
                             PumpOutcome::Done => Ok(()),
                             PumpOutcome::Timeout => {
@@ -859,7 +884,14 @@ fn worker_loop(
                     }
                 };
                 match outcome {
-                    Ok(()) => set_state(&state, &evt, SessionState::Ready),
+                    Ok(()) => {
+                        if let Some(context) = context.as_ref() {
+                            for diagnostic in parse_ghc_diagnostics(&acc) {
+                                emit_diagnostic(&evt, context, diagnostic);
+                            }
+                        }
+                        set_state(&state, &evt, SessionState::Ready);
+                    }
                     Err(msg) => {
                         emit_output(&evt, "stderr", msg, context.as_ref());
                         kill(&mut active);
@@ -894,7 +926,38 @@ mod tests {
     use super::*;
 
     #[test]
-    fn eval_output_event_serializes_correlation_metadata() {
+    fn diagnostic_event_serializes_correlation_metadata() {
+        let (events, received) = mpsc::channel();
+        let context = EvalContext {
+            request_id: "eval-12".to_string(),
+            document_version: Some(8),
+            statement_index: Some(2),
+        };
+
+        emit_diagnostic(
+            &events,
+            &context,
+            GhcDiagnostic {
+                line: 14,
+                column: Some(6),
+                summary: "type mismatch".to_string(),
+                details: vec!["expected Pattern".to_string()],
+            },
+        );
+
+        let serialized = serde_json::to_value(received.recv().unwrap()).unwrap();
+        assert_eq!(serialized["kind"], "diagnostic");
+        assert_eq!(serialized["requestId"], "eval-12");
+        assert_eq!(serialized["documentVersion"], 8);
+        assert_eq!(serialized["statementIndex"], 2);
+        assert_eq!(serialized["line"], 14);
+        assert_eq!(serialized["column"], 6);
+        assert_eq!(serialized["summary"], "type mismatch");
+        assert_eq!(serialized["details"][0], "expected Pattern");
+    }
+
+    #[test]
+    fn eval_output_event_preserves_request_correlation() {
         let (events, received) = mpsc::channel();
         let context = EvalContext {
             request_id: "eval-12".to_string(),
@@ -905,7 +968,7 @@ mod tests {
         emit_output(
             &events,
             "stdout",
-            "diagnostic chunk".to_string(),
+            "evaluation output".to_string(),
             Some(&context),
         );
 
@@ -979,7 +1042,9 @@ mod tests {
                     state: SessionState::Failed,
                 } => return Err(format!("session failed, output so far: {out}")),
                 SessionEvent::State { state } => return Err(format!("unexpected state {state:?}")),
-                SessionEvent::Engine { .. } | SessionEvent::Playback { .. } => {}
+                SessionEvent::Engine { .. }
+                | SessionEvent::Playback { .. }
+                | SessionEvent::Diagnostic { .. } => {}
             }
         }
     }
@@ -995,6 +1060,9 @@ mod tests {
                 SessionEvent::State { state } => log.push_str(&format!("[state {state:?}]\n")),
                 SessionEvent::Playback { cycle, .. } => {
                     log.push_str(&format!("[playback cycle {cycle:.2}]\n"));
+                }
+                SessionEvent::Diagnostic { line, summary, .. } => {
+                    log.push_str(&format!("[diagnostic {line}: {summary}]\n"));
                 }
             }
         }
@@ -1136,11 +1204,57 @@ mod tests {
             );
         }
 
-        let out = run_eval_at(&sess, &mut rx, "undefinedThing 1", Some(7)).unwrap();
+        let request_id = "headless-diagnostic-test".to_string();
+        sess.eval_with_context(
+            "undefinedThing 1".to_string(),
+            Some(7),
+            EvalContext {
+                request_id: request_id.clone(),
+                document_version: Some(12),
+                statement_index: Some(0),
+            },
+        )
+        .unwrap();
+        let mut out = String::new();
+        let mut diagnostic = None;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let event = rx
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .expect("eval should produce output and complete");
+            match event {
+                SessionEvent::Output { text, .. } => out.push_str(&text),
+                event @ SessionEvent::Diagnostic { .. } => diagnostic = Some(event),
+                SessionEvent::State {
+                    state: SessionState::Ready,
+                } => break,
+                SessionEvent::State { state } => {
+                    assert_ne!(state, SessionState::Failed, "session failed: {out}");
+                }
+                SessionEvent::Engine { .. } | SessionEvent::Playback { .. } => {}
+            }
+        }
         assert!(
             out.contains("tIDE.hs:7:"),
             "error must point at the editor line 7, got: {out}"
         );
+        match diagnostic.expect("localized GHC error should produce a diagnostic event") {
+            SessionEvent::Diagnostic {
+                request_id: actual_request,
+                document_version,
+                statement_index,
+                line,
+                summary,
+                ..
+            } => {
+                assert_eq!(actual_request, request_id);
+                assert_eq!(document_version, Some(12));
+                assert_eq!(statement_index, Some(0));
+                assert_eq!(line, 7);
+                assert!(summary.contains("undefinedThing"), "summary: {summary}");
+            }
+            _ => unreachable!(),
+        }
 
         sess.stop();
         assert!(wait_for_state(&sess, SessionState::Stopped, 15));
