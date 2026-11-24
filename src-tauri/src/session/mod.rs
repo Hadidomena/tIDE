@@ -4,7 +4,7 @@ use crate::engine::{AudioDevices, AudioInputChoice, Engine, EngineLauncher, Engi
 use crate::feedback::{Feedback, OrbitHit};
 use process::{
     GhcDiagnostic, PRELUDE, PROMPT_SETUP, Statement, is_ready, parse_ghc_diagnostics,
-    prelude_prompts, split_statements, wrap_code,
+    parse_typecheck_diagnostics, prelude_prompts, split_statements, wrap_code, wrap_typecheck,
 };
 use serde::Serialize;
 use std::io::{Read, Write};
@@ -67,6 +67,10 @@ pub enum SessionEvent {
         summary: String,
         details: Vec<String>,
     },
+    CheckComplete {
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
     Engine {
         engine: Engine,
         status: EngineState,
@@ -116,6 +120,11 @@ enum Cmd {
         code: String,
         line: Option<usize>,
         context: Option<EvalContext>,
+    },
+    Check {
+        code: String,
+        line: usize,
+        context: EvalContext,
     },
     Death {
         id: u32,
@@ -252,6 +261,14 @@ impl Session {
             code,
             line,
             context: Some(context),
+        })
+    }
+
+    fn check(&self, code: String, line: usize, context: EvalContext) -> Result<(), String> {
+        self.send(Cmd::Check {
+            code,
+            line,
+            context,
         })
     }
 
@@ -414,6 +431,35 @@ pub fn session_eval_file(
 }
 
 #[tauri::command]
+pub fn session_check(
+    code: String,
+    line: usize,
+    request_id: String,
+    document_version: Option<u64>,
+    session: State<'_, Session>,
+) -> Result<bool, String> {
+    if session.state() != SessionState::Ready {
+        return Err(format!("session not ready (state: {:?})", session.state()));
+    }
+    if request_id.trim().is_empty() {
+        return Err("missing check request id".to_string());
+    }
+    if wrap_typecheck(&code).is_none() {
+        return Ok(false);
+    }
+    session.check(
+        code,
+        line,
+        EvalContext {
+            request_id,
+            document_version,
+            statement_index: None,
+        },
+    )?;
+    Ok(true)
+}
+
+#[tauri::command]
 pub fn session_restart(
     engine: Option<String>,
     audio_in: Option<AudioInputChoice>,
@@ -517,17 +563,22 @@ fn pump(
     timeout: Duration,
     min_prompts: usize,
     context: Option<&EvalContext>,
+    forward_output: bool,
 ) -> PumpOutcome {
     let deadline = Instant::now() + timeout;
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         match a.lines.recv_timeout(remaining) {
             Ok(Line::Stdout(t)) => {
-                emit_output(evt, "stdout", t.clone(), context);
+                if forward_output {
+                    emit_output(evt, "stdout", t.clone(), context);
+                }
                 acc.push_str(&t);
             }
             Ok(Line::Stderr(t)) => {
-                emit_output(evt, "stderr", t.clone(), context);
+                if forward_output {
+                    emit_output(evt, "stderr", t.clone(), context);
+                }
                 acc.push_str(&t);
             }
             Err(RecvTimeoutError::Timeout) => return PumpOutcome::Timeout,
@@ -699,6 +750,7 @@ fn do_start(
         STARTUP_TIMEOUT,
         PROMPT_SETUP.matches('\n').count(),
         None,
+        true,
     ) {
         PumpOutcome::Done => {}
         PumpOutcome::Timeout => {
@@ -722,6 +774,7 @@ fn do_start(
         STARTUP_TIMEOUT,
         prelude_prompts(),
         None,
+        true,
     ) {
         PumpOutcome::Done => Ok(a),
         PumpOutcome::Timeout => {
@@ -873,7 +926,7 @@ fn worker_loop(
                     if let Err(e) = write_all(&mut a.stdin, &frame) {
                         Err(e)
                     } else {
-                        match pump(a, &evt, &mut acc, EVAL_TIMEOUT, 1, context.as_ref()) {
+                        match pump(a, &evt, &mut acc, EVAL_TIMEOUT, 1, context.as_ref(), true) {
                             PumpOutcome::Done => Ok(()),
                             PumpOutcome::Timeout => {
                                 Err("eval timed out waiting for prompt — restart the session"
@@ -898,6 +951,58 @@ fn worker_loop(
                         set_state(&state, &evt, SessionState::Failed);
                     }
                 }
+            }
+
+            Cmd::Check {
+                code,
+                line,
+                context,
+            } => {
+                let request_id = context.request_id.clone();
+                let Some(frame) = wrap_typecheck(&code) else {
+                    let _ = evt.send(SessionEvent::CheckComplete { request_id });
+                    continue;
+                };
+                if active.is_none() {
+                    emit_output(
+                        &evt,
+                        "stderr",
+                        "no session — start it first".to_string(),
+                        Some(&context),
+                    );
+                    let _ = evt.send(SessionEvent::CheckComplete { request_id });
+                    continue;
+                }
+
+                let mut acc = String::new();
+                let outcome = {
+                    let a = active.as_mut().unwrap();
+                    if let Err(e) = write_all(&mut a.stdin, &frame) {
+                        Err(e)
+                    } else {
+                        match pump(a, &evt, &mut acc, EVAL_TIMEOUT, 1, Some(&context), false) {
+                            PumpOutcome::Done => Ok(()),
+                            PumpOutcome::Timeout => Err(
+                                "type check timed out waiting for prompt — restart the session"
+                                    .to_string(),
+                            ),
+                            PumpOutcome::Died => Err("ghci exited during type check".to_string()),
+                        }
+                    }
+                };
+                match outcome {
+                    Ok(()) => {
+                        for diagnostic in parse_typecheck_diagnostics(&acc, line) {
+                            emit_diagnostic(&evt, &context, diagnostic);
+                        }
+                    }
+                    Err(message) => {
+                        emit_output(&evt, "stderr", message, Some(&context));
+                        kill(&mut active);
+                        set_state(&state, &evt, SessionState::Failed);
+                    }
+                }
+                let _ = evt.send(SessionEvent::CheckComplete { request_id });
             }
 
             Cmd::Death { id, reason } => {
@@ -1044,7 +1149,8 @@ mod tests {
                 SessionEvent::State { state } => return Err(format!("unexpected state {state:?}")),
                 SessionEvent::Engine { .. }
                 | SessionEvent::Playback { .. }
-                | SessionEvent::Diagnostic { .. } => {}
+                | SessionEvent::Diagnostic { .. }
+                | SessionEvent::CheckComplete { .. } => {}
             }
         }
     }
@@ -1100,7 +1206,43 @@ mod tests {
                 SessionEvent::State { state } => {
                     return Err(format!("unexpected state {state:?}"));
                 }
-                SessionEvent::Engine { .. } | SessionEvent::Playback { .. } => {}
+                SessionEvent::Engine { .. }
+                | SessionEvent::Playback { .. }
+                | SessionEvent::CheckComplete { .. } => {}
+            }
+        }
+    }
+
+    fn run_typecheck(
+        sess: &Session,
+        rx: &mut Receiver<SessionEvent>,
+        code: &str,
+        line: usize,
+        context: EvalContext,
+    ) -> Result<Vec<SessionEvent>, String> {
+        let request_id = context.request_id.clone();
+        sess.check(code.to_string(), line, context)?;
+
+        let mut diagnostics = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let event = rx
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .map_err(|_| "type check did not complete".to_string())?;
+            match event {
+                event @ SessionEvent::Diagnostic { .. } => diagnostics.push(event),
+                SessionEvent::CheckComplete {
+                    request_id: completed,
+                } if completed == request_id => {
+                    return Ok(diagnostics);
+                }
+                SessionEvent::Output { text, .. } => {
+                    return Err(format!("type check unexpectedly wrote output: {text}"));
+                }
+                SessionEvent::State {
+                    state: SessionState::Failed,
+                } => return Err("session failed during type check".to_string()),
+                _ => {}
             }
         }
     }
@@ -1120,6 +1262,7 @@ mod tests {
                 SessionEvent::Diagnostic { line, summary, .. } => {
                     log.push_str(&format!("[diagnostic {line}: {summary}]\n"));
                 }
+                SessionEvent::CheckComplete { .. } => {}
             }
         }
         log
@@ -1363,6 +1506,83 @@ mod tests {
             }
             _ => unreachable!(),
         }
+
+        let diagnostics = run_typecheck(
+            &sess,
+            &mut rx,
+            "d1 $ s \"bd\"",
+            16,
+            EvalContext {
+                request_id: "headless-typecheck-valid".to_string(),
+                document_version: Some(14),
+                statement_index: None,
+            },
+        )
+        .unwrap();
+        assert!(
+            diagnostics.is_empty(),
+            "valid Tidal expression must typecheck: {diagnostics:?}"
+        );
+
+        let diagnostics = run_typecheck(
+            &sess,
+            &mut rx,
+            "let tideCheckOnly = 41",
+            17,
+            EvalContext {
+                request_id: "headless-typecheck-let".to_string(),
+                document_version: Some(14),
+                statement_index: None,
+            },
+        )
+        .unwrap();
+        assert!(diagnostics.is_empty(), "let binding should typecheck");
+        let out = run_eval(&sess, &mut rx, ":t tideCheckOnly").unwrap();
+        assert!(
+            out.contains("not in scope"),
+            "typechecking must not add bindings to the REPL: {out}"
+        );
+
+        let diagnostics = run_typecheck(
+            &sess,
+            &mut rx,
+            "let tideCheckBad = (1 :: Int) + 2.0",
+            18,
+            EvalContext {
+                request_id: "headless-typecheck-let-error".to_string(),
+                document_version: Some(15),
+                statement_index: None,
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            diagnostics.first(),
+            Some(SessionEvent::Diagnostic { line: 18, .. })
+        ));
+
+        let diagnostics = run_typecheck(
+            &sess,
+            &mut rx,
+            "d1 $ s \"bd\" # gain (1 :: Int)",
+            19,
+            EvalContext {
+                request_id: "headless-typecheck-error".to_string(),
+                document_version: Some(16),
+                statement_index: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(diagnostics.len(), 1, "diagnostics: {diagnostics:?}");
+        assert!(matches!(
+            diagnostics.first(),
+            Some(SessionEvent::Diagnostic {
+                request_id,
+                document_version: Some(16),
+                line: 19,
+                summary,
+                ..
+            }) if request_id == "headless-typecheck-error" && summary.contains("Pattern Double")
+        ));
 
         sess.stop();
         assert!(wait_for_state(&sess, SessionState::Stopped, 15));

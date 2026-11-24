@@ -79,11 +79,127 @@ pub fn parse_ghc_diagnostics(output: &str) -> Vec<GhcDiagnostic> {
         .collect()
 }
 
+pub fn wrap_typecheck(code: &str) -> Option<String> {
+    let code = code.trim().replace("\r\n", "\n");
+    if code.is_empty()
+        || code.starts_with(':')
+        || code.starts_with("--")
+        || code.starts_with("{-#")
+        || code.starts_with("import ")
+        || code.starts_with("module ")
+        || code.starts_with("data ")
+        || code.starts_with("newtype ")
+        || code.starts_with("type ")
+        || code.starts_with("class ")
+        || code.starts_with("instance ")
+        || code.lines().any(|line| line.trim_start().starts_with(':'))
+        || contains_quasiquote(&code)
+        || code.contains("$(")
+        || code.contains("$$")
+        || code.contains("[|")
+        || code.contains("[d|")
+        || code.contains("[t|")
+        || code.contains("[p|")
+        || code.contains("[e|")
+        || code.contains("[||")
+        || code.contains("[d||")
+    {
+        return None;
+    }
+
+    let expression = match code.strip_prefix("let ") {
+        Some(binding) => wrap_binding(binding, &code)?,
+        None => match split_top_level_binding(&code) {
+            Some((_, _)) => wrap_binding(&code, &code)?,
+            None => code.clone(),
+        },
+    };
+
+    if expression.contains('\n') {
+        let (first, rest) = expression.split_once('\n').unwrap();
+        Some(format!(":{{\n:type ({first}\n{rest}\n)\n:}}\n"))
+    } else {
+        Some(format!(":type {expression}\n"))
+    }
+}
+
+fn contains_quasiquote(code: &str) -> bool {
+    let bytes = code.as_bytes();
+    bytes.iter().enumerate().any(|(start, byte)| {
+        if *byte != b'[' {
+            return false;
+        }
+        let mut end = start + 1;
+        if !bytes
+            .get(end)
+            .is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'_')
+        {
+            return false;
+        }
+        while bytes.get(end).is_some_and(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(*byte, b'_' | b'\'' | b'.')
+        }) {
+            end += 1;
+        }
+        bytes.get(end) == Some(&b'|')
+    })
+}
+
+fn wrap_binding(binding: &str, source: &str) -> Option<String> {
+    if source.contains(';') || source.contains(" where ") {
+        return None;
+    }
+    let (name, _) = split_top_level_binding(binding)?;
+    Some(format!("{source}\n in {name}"))
+}
+
+fn split_top_level_binding(source: &str) -> Option<(&str, &str)> {
+    let (left, right) = source.split_once('=')?;
+    let left = left.trim();
+    let name = left.split_whitespace().next()?;
+    let mut chars = name.chars();
+    let first = chars.next()?;
+    if !(first.is_ascii_lowercase() || first == '_')
+        || !chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '\'')
+        || right.starts_with('=')
+        || left.contains("::")
+    {
+        return None;
+    }
+    Some((name, right))
+}
+
+pub fn parse_typecheck_diagnostics(output: &str, editor_line: usize) -> Vec<GhcDiagnostic> {
+    let plain = strip_ansi(output).replace("\r\n", "\n").replace('\r', "\n");
+    let mapped = plain
+        .lines()
+        .map(|line| {
+            let Some(start) = line.find("<interactive>:") else {
+                return line.to_string();
+            };
+            let location = &line[start + "<interactive>:".len()..];
+            let Some((interactive_line, column, rest)) = parse_error_location(location) else {
+                return line.to_string();
+            };
+            let source_line = editor_line + interactive_line.saturating_sub(1);
+            let column = column.map_or(String::new(), |column| format!(":{column}"));
+            format!("{}tIDE.hs:{source_line}{column}{rest}", &line[..start])
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    parse_ghc_diagnostics(&mapped)
+}
+
 fn parse_error_header(header: &str) -> Option<(usize, Option<usize>)> {
     let (file_start, _) = header
         .match_indices("tIDE.hs:")
         .find(|(start, _)| is_file_boundary(header, *start))?;
     let location = &header[file_start + "tIDE.hs:".len()..];
+    let (line, column, _) = parse_error_location(location)?;
+    Some((line, column))
+}
+
+fn parse_error_location(location: &str) -> Option<(usize, Option<usize>, &str)> {
     let (line, mut rest) = parse_decimal_prefix(location)?;
     if line == 0 {
         return None;
@@ -110,7 +226,7 @@ fn parse_error_header(header: &str) -> Option<(usize, Option<usize>)> {
     }
 
     rest.strip_prefix(": error:")?;
-    Some((line, column))
+    Some((line, column, rest))
 }
 
 fn is_file_boundary(text: &str, start: usize) -> bool {
@@ -383,6 +499,58 @@ mod tests {
         let diagnostics = parse_ghc_diagnostics(output);
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(diagnostics[0].summary, "Bad type");
+    }
+
+    #[test]
+    fn wraps_expressions_as_non_evaluating_type_queries() {
+        assert_eq!(
+            wrap_typecheck("d1 $ s \"bd\""),
+            Some(":type d1 $ s \"bd\"\n".to_string())
+        );
+        assert_eq!(
+            wrap_typecheck("d1 $ s \"bd\"\n  # gain 0.8"),
+            Some(":{\n:type (d1 $ s \"bd\"\n  # gain 0.8\n)\n:}\n".to_string())
+        );
+    }
+
+    #[test]
+    fn wraps_bindings_in_a_non_mutating_let_expression() {
+        assert_eq!(
+            wrap_typecheck("let tidePattern = s \"bd\""),
+            Some(":{\n:type (let tidePattern = s \"bd\"\n in tidePattern\n)\n:}\n".to_string())
+        );
+    }
+
+    #[test]
+    fn skips_commands_and_compile_time_code_from_typechecks() {
+        assert_eq!(wrap_typecheck(":hush"), None);
+        assert_eq!(wrap_typecheck("-- comment"), None);
+        assert_eq!(wrap_typecheck("$(unsafeCode)"), None);
+        assert_eq!(wrap_typecheck("d1 $ s \"bd\"\n:} \n:! harmless"), None);
+        assert_eq!(wrap_typecheck("[| code |]"), None);
+        assert_eq!(wrap_typecheck("[sql| SELECT 1 |]"), None);
+    }
+
+    #[test]
+    fn maps_interactive_typecheck_locations_back_to_the_editor() {
+        let output = concat!(
+            "tIDE| <interactive>:2:11: error: [GHC-83865]\n",
+            "    • Couldn't match expected type ‘Pattern Double’\n",
+            "      with actual type ‘Int’\n",
+            "      In the first argument of ‘gain’\n",
+            "\ntIDE> "
+        );
+        let diagnostics = parse_typecheck_diagnostics(output, 40);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].line, 41);
+        assert_eq!(diagnostics[0].column, Some(11));
+        assert!(diagnostics[0].summary.contains("Pattern Double"));
+        assert!(
+            diagnostics[0]
+                .details
+                .iter()
+                .any(|line| line.contains("actual type"))
+        );
     }
 
     #[test]

@@ -40,6 +40,7 @@ export interface ImportedSample {
 export interface EditorApi {
 	selection(): string;
 	insert(code: string): boolean;
+	cancelPendingTypeCheck(): void;
 }
 
 const AUDIO_FILTERS = [

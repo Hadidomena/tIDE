@@ -13,7 +13,9 @@ use library::import::sample_import;
 use library::sample_delete;
 use library::transform::{dirt_samples_groups, sample_reload, sample_transform};
 use project::{project_open, project_save};
-use session::{Session, session_eval, session_eval_file, session_restart, session_start};
+use session::{
+    Session, session_check, session_eval, session_eval_file, session_restart, session_start,
+};
 use toolchain::{audio_devices, toolchain_detect};
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
@@ -45,6 +47,7 @@ pub fn run() {
             session_start,
             session_eval,
             session_eval_file,
+            session_check,
             session_restart,
             project_open,
             project_save,

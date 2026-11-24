@@ -144,6 +144,89 @@
 		return Decoration.set(decorations, true);
 	}
 
+	function isContinuationLine(text: string): boolean {
+		const trimmed = text.trim();
+		return !trimmed || /^[ \t]/.test(text) || trimmed.startsWith('--');
+	}
+
+	function insideBlockComment(text: string): boolean {
+		const closers: string[] = [];
+		let inString = false;
+		for (let i = 0; i < text.length; i += 1) {
+			if (inString) {
+				if (text[i] === '\\') i += 1;
+				else if (text[i] === '"') inString = false;
+				continue;
+			}
+
+			if (closers.length > 0) {
+				if (text.startsWith('{--', i)) {
+					closers.push('--}');
+					i += 2;
+				} else if (text.startsWith('{-', i)) {
+					closers.push('-}');
+					i += 1;
+				} else if (text.startsWith(closers.at(-1)!, i)) {
+					i += closers.pop()!.length - 1;
+				}
+				continue;
+			}
+
+			if (text.startsWith('--', i)) {
+				const newline = text.indexOf('\n', i + 2);
+				if (newline < 0) break;
+				i = newline;
+			} else if (text.startsWith('{--', i)) {
+				closers.push('--}');
+				i += 2;
+			} else if (text.startsWith('{-', i)) {
+				closers.push('-}');
+				i += 1;
+			} else if (text[i] === '"') {
+				inString = true;
+			}
+		}
+		return closers.length > 0;
+	}
+
+	function insideGhciBlock(state: EditorState, line: number): boolean {
+		let open = false;
+		for (let number = 1; number <= line; number += 1) {
+			const text = state.doc.line(number).text.trim();
+			if (text.startsWith(':{')) open = true;
+			else if (text === ':}') open = false;
+		}
+		return open;
+	}
+
+	function statementAt(
+		state: EditorState,
+		position: number
+	): { code: string; line: number } | null {
+		if (insideBlockComment(state.doc.sliceString(0, position))) return null;
+		const current = state.doc.lineAt(position);
+		if (insideGhciBlock(state, current.number)) return null;
+		const trimmed = current.text.trim();
+		if (
+			!trimmed ||
+			trimmed.startsWith('--') ||
+			trimmed.startsWith('{-') ||
+			trimmed.startsWith(':')
+		) {
+			return null;
+		}
+
+		let first = current.number;
+		while (first > 1 && isContinuationLine(state.doc.line(first - 1).text)) first -= 1;
+
+		let last = current.number;
+		while (last < state.doc.lines && isContinuationLine(state.doc.line(last + 1).text)) last += 1;
+
+		const from = state.doc.line(first).from;
+		const to = state.doc.line(last).to;
+		return { code: state.doc.sliceString(from, to), line: first };
+	}
+
 	interface Props {
 		content?: string;
 		diagnostics?: SessionDiagnostic[];
@@ -153,6 +236,7 @@
 		onHush?: () => void;
 		onPreviewSample?: (name: string) => void;
 		onDocumentChange?: () => void;
+		onCheck?: (code: string, line: number) => void;
 	}
 
 	let {
@@ -163,13 +247,15 @@
 		onRunAll = () => {},
 		onHush = () => {},
 		onPreviewSample = () => {},
-		onDocumentChange = () => {}
+		onDocumentChange = () => {},
+		onCheck = () => {}
 	}: Props = $props();
 
 	let host: HTMLDivElement | undefined = $state();
 	let view: EditorView | undefined;
 	let expandedDiagnosticKeys = $state<string[]>([]);
 	let expandedDiagnosticRequestId: string | null = null;
+	let typeCheckTimer: ReturnType<typeof setTimeout> | undefined;
 
 	const samples = sampleCompletion((name) => onPreviewSample(name));
 
@@ -233,9 +319,29 @@
 	}
 
 	function evalLineOrSelection(v: EditorView): boolean {
+		cancelTypeCheck();
 		const { code, line } = lineOrSelection(v);
 		if (code.trim()) onEval(code, line);
 		return true;
+	}
+
+	function cancelTypeCheck() {
+		if (typeCheckTimer !== undefined) clearTimeout(typeCheckTimer);
+		typeCheckTimer = undefined;
+	}
+
+	export function cancelPendingTypeCheck() {
+		cancelTypeCheck();
+	}
+
+	function scheduleTypeCheck(v: EditorView) {
+		cancelTypeCheck();
+		const statement = statementAt(v.state, v.state.selection.main.head);
+		if (!statement) return;
+		typeCheckTimer = setTimeout(() => {
+			typeCheckTimer = undefined;
+			if (view === v) onCheck(statement.code, statement.line);
+		}, 600);
 	}
 
 	const setDiagnostics = StateEffect.define<{
@@ -316,6 +422,7 @@
 								key: 'Shift-Mod-Enter',
 								preventDefault: true,
 								run: (v) => {
+									cancelTypeCheck();
 									onRunAll(v.state.doc.toString());
 									return true;
 								}
@@ -356,12 +463,14 @@
 						if (u.docChanged) {
 							content = u.state.doc.toString();
 							onDocumentChange();
+							scheduleTypeCheck(u.view);
 						}
 					})
 				]
 			})
 		});
 		return () => {
+			cancelTypeCheck();
 			view?.destroy();
 			view = undefined;
 		};

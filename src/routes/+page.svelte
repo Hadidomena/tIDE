@@ -153,7 +153,8 @@ d1 $ s "bd sn:1 ~ hh"
 		}
 		bindEditor({
 			selection: () => current.selection(),
-			insert: (code) => current.insert(code)
+			insert: (code) => current.insert(code),
+			cancelPendingTypeCheck: () => current.cancelPendingTypeCheck()
 		});
 	});
 
@@ -257,11 +258,17 @@ d1 $ s "bd sn:1 ~ hh"
 		session.documentChanged(documentVersion);
 	}
 
+	function handleTypeCheck(code: string, line: number) {
+		session.check(code, line, documentVersion);
+	}
+
 	function handleHush() {
+		editor?.cancelPendingTypeCheck();
 		void session.hush();
 	}
 
 	function handleRunAll(code: string) {
+		editor?.cancelPendingTypeCheck();
 		lastEvalLine = {};
 		void session.runFile(code, documentVersion);
 	}
@@ -326,6 +333,7 @@ d1 $ s "bd sn:1 ~ hh"
 		if (e.key !== 'Enter') return;
 		const code = lineIn.trim();
 		if (!code) return;
+		editor?.cancelPendingTypeCheck();
 		session.echo(code);
 		void session.eval(code);
 		lineIn = '';
@@ -422,6 +430,7 @@ d1 $ s "bd sn:1 ~ hh"
 			onEval={handleEval}
 			onRunAll={handleRunAll}
 			onDocumentChange={handleDocumentChange}
+			onCheck={handleTypeCheck}
 			onHush={handleHush}
 			onPreviewSample={handlePreviewSample}
 		/>

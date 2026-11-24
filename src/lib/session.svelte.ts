@@ -52,8 +52,15 @@ type WireEvent =
 			statementIndex?: number | null;
 	  }
 	| ({ kind: 'diagnostic' } & SessionDiagnostic)
+	| { kind: 'checkComplete'; requestId: string }
 	| ({ kind: 'engine' } & EngineStatus)
 	| ({ kind: 'playback' } & Playback);
+
+interface PendingTypeCheck {
+	code: string;
+	line: number;
+	documentVersion: number;
+}
 
 const MAX_CHUNKS = 2000;
 
@@ -70,6 +77,9 @@ class SessionModel {
 	private activeRequestId: string | undefined;
 	private activeDocumentVersion: number | undefined;
 	private documentVersion = 0;
+	private checkInFlightId: string | undefined;
+	private pendingTypeCheck: PendingTypeCheck | undefined;
+	private checkWaitForReady = false;
 
 	async connect(
 		engine: string | null = null,
@@ -92,6 +102,10 @@ class SessionModel {
 			if (ev.state !== 'ready' && ev.state !== 'busy') {
 				this.playback = null;
 			}
+			if (ev.state === 'ready') {
+				this.checkWaitForReady = false;
+				this.flushPendingTypeCheck();
+			}
 			return;
 		}
 		if (ev.kind === 'engine') {
@@ -110,6 +124,13 @@ class SessionModel {
 		if (ev.kind === 'diagnostic') {
 			if (this.isCurrentEval(ev.requestId, ev.documentVersion ?? undefined)) {
 				this.diagnostics.push(ev);
+			}
+			return;
+		}
+		if (ev.kind === 'checkComplete') {
+			if (ev.requestId === this.checkInFlightId) {
+				this.checkInFlightId = undefined;
+				this.flushPendingTypeCheck();
 			}
 			return;
 		}
@@ -135,20 +156,75 @@ class SessionModel {
 
 	private beginEvalRequest(documentVersion?: number): string {
 		const requestId = `eval-${++this.requestSeq}`;
+		this.pendingTypeCheck = undefined;
+		this.checkWaitForReady = false;
 		this.activeRequestId = requestId;
 		this.activeDocumentVersion = documentVersion;
 		this.diagnostics = [];
 		return requestId;
 	}
 
+	check(code: string, line: number, documentVersion: number) {
+		if (!code.trim()) return;
+		this.pendingTypeCheck = { code, line, documentVersion };
+		this.flushPendingTypeCheck();
+	}
+
+	private flushPendingTypeCheck() {
+		const request = this.pendingTypeCheck;
+		if (!request || this.checkInFlightId || this.checkWaitForReady || this.state !== 'ready')
+			return;
+		this.pendingTypeCheck = undefined;
+		if (request.documentVersion !== this.documentVersion) return;
+
+		const requestId = `check-${++this.requestSeq}`;
+		this.activeRequestId = requestId;
+		this.activeDocumentVersion = request.documentVersion;
+		this.diagnostics = [];
+		this.checkInFlightId = requestId;
+		void invoke<boolean>('session_check', {
+			code: request.code,
+			line: request.line,
+			requestId,
+			documentVersion: request.documentVersion
+		})
+			.then((accepted) => {
+				if (accepted || this.checkInFlightId !== requestId) return;
+				this.checkInFlightId = undefined;
+				if (this.activeRequestId === requestId) {
+					this.activeRequestId = undefined;
+					this.activeDocumentVersion = undefined;
+					this.diagnostics = [];
+				}
+				this.flushPendingTypeCheck();
+			})
+			.catch(() => {
+				if (this.checkInFlightId !== requestId) return;
+				this.checkInFlightId = undefined;
+				if (
+					request.documentVersion === this.documentVersion &&
+					this.activeRequestId === requestId
+				) {
+					this.activeRequestId = undefined;
+					this.activeDocumentVersion = undefined;
+					this.pendingTypeCheck ??= request;
+					this.checkWaitForReady = true;
+				}
+			});
+	}
+
 	documentChanged(version: number) {
 		this.documentVersion = version;
+		this.pendingTypeCheck = undefined;
+		this.checkWaitForReady = false;
 		this.clearEvalResults();
 	}
 
 	private clearEvalResults() {
 		this.activeRequestId = undefined;
 		this.activeDocumentVersion = undefined;
+		this.pendingTypeCheck = undefined;
+		this.checkWaitForReady = false;
 		this.diagnostics = [];
 	}
 
